@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Build / logs
+dist/
+build/
+*.log
+npm-debug.log*
+
+# Uploads / temp
+uploads/
+src/uploads/
+coverage/
+
+# OS
+.DS_Store
