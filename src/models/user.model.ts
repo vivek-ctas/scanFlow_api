@@ -114,4 +114,4 @@ userSchema.methods.isPasswordMatch = async function (
   },
 );
 
-export const User = mongoose.model<IUser, IUserModel>('User', userSchema);
+export const User = mongoose.model<IUser, IUserModel>('tbl_user', userSchema);

@@ -51,4 +51,4 @@ tokenSchema.index({ token: 1, type: 1 });
 
 tokenSchema.plugin(toJSON);
 
-export const Token = mongoose.model<IToken>('Token', tokenSchema);
+export const Token = mongoose.model<IToken>('tbl_token', tokenSchema);
