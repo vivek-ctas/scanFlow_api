@@ -1,8 +1,10 @@
 import jwt from 'jsonwebtoken';
 import moment from 'moment';
+import httpStatus from 'http-status';
 import config from '../config/config.js';
 import { tokenTypes } from '../config/tokens.js';
 import { Token } from '../models/token.model.js';
+import { ApiError } from '../utils/ApiError.js';
 
 export const generateToken = (
   userId: string,
@@ -37,7 +39,12 @@ export const saveToken = async (
 };
 
 export const verifyToken = async (token: string, type: string) => {
-  const payload = jwt.verify(token, config.jwt.secret) as { sub: string };
+  let payload: { sub: string };
+  try {
+    payload = jwt.verify(token, config.jwt.secret) as { sub: string };
+  } catch {
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Invalid token');
+  }
   const tokenDoc = await Token.findOne({
     token,
     type,
@@ -45,7 +52,7 @@ export const verifyToken = async (token: string, type: string) => {
     blacklisted: false,
   });
   if (!tokenDoc) {
-    throw new Error('Token not found');
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Invalid token');
   }
   return tokenDoc;
 };

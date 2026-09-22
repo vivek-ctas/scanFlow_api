@@ -1,10 +1,4 @@
-import mongoose, {
-  Document,
-  Schema,
-  Model,
-  Query,
-  CallbackWithoutResultAndOptionalError,
-} from 'mongoose';
+import mongoose, { Document, Schema, Model, Query } from 'mongoose';
 import validator from 'validator';
 import bcrypt from 'bcryptjs';
 import { roles } from '../config/roles.js';
@@ -17,6 +11,7 @@ export interface IUser extends Document {
   email: string;
   contact_no?: string;
   password?: string;
+  business_address?: string;
   role: string;
   isSuperAdmin: boolean;
   is_seller_user: boolean;
@@ -57,6 +52,7 @@ const userSchema = new Schema<IUser, IUserModel>(
       },
     },
     contact_no: { type: String, trim: true },
+    business_address: { type: String, trim: true },
     password: {
       type: String,
       trim: true,
@@ -81,8 +77,6 @@ const userSchema = new Schema<IUser, IUserModel>(
   { timestamps: true },
 );
 
-userSchema.index({ email: 1 }, { unique: true });
-
 userSchema.plugin(toJSON);
 userSchema.plugin(paginate);
 
@@ -101,23 +95,15 @@ userSchema.methods.isPasswordMatch = async function (
 };
 
 // Use any for middleware to avoid Mongoose 8 type issues
-(userSchema as any).pre(
-  'save',
-  async function (this: IUser, next: CallbackWithoutResultAndOptionalError) {
-    const user = this;
-    if (user.isModified('password') && user.get('password')) {
-      user.set('password', bcrypt.hashSync(user.get('password') as string, 8));
-    }
-    next();
-  },
-);
+(userSchema as any).pre('save', async function (this: IUser) {
+  if (this.isModified('password') && this.get('password')) {
+    this.set('password', bcrypt.hashSync(this.get('password') as string, 8));
+  }
+});
 
 (userSchema as any).pre(
   'findOneAndUpdate',
-  async function (
-    this: Query<any, IUser>,
-    next: CallbackWithoutResultAndOptionalError,
-  ) {
+  async function (this: Query<any, IUser>) {
     const update = this.getUpdate() as Record<string, any>;
     if (update && update.password) {
       this.setUpdate({
@@ -125,7 +111,6 @@ userSchema.methods.isPasswordMatch = async function (
         password: bcrypt.hashSync(update.password, 8),
       });
     }
-    next();
   },
 );
 

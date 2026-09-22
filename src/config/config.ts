@@ -44,6 +44,15 @@ const envVarsSchema = Joi.object()
       .allow('')
       .description('the from field in the emails sent by the app'),
     CLIENT_URL: Joi.string().allow('').description('frontend origin'),
+    BEHIND_REVERSE_PROXY: Joi.boolean()
+      .default(false)
+      .description('trust X-Forwarded-* headers when behind a reverse proxy'),
+    BYPASS_EMAIL: Joi.string()
+      .allow('')
+      .description('dev-only email that skips real OTP delivery'),
+    BYPASS_OTP: Joi.string()
+      .allow('')
+      .description('dev-only fixed OTP accepted instead of the generated one'),
   })
   .unknown();
 
@@ -82,6 +91,11 @@ export const config = {
     from: envVars.EMAIL_FROM,
   },
   clientUrl: envVars.CLIENT_URL,
+  behindReverseProxy: envVars.BEHIND_REVERSE_PROXY,
+  auth: {
+    bypassEmail: envVars.BYPASS_EMAIL,
+    bypassOtp: envVars.BYPASS_OTP,
+  },
 };
 
 export default config;

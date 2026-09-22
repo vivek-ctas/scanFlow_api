@@ -25,8 +25,10 @@ src/
 ```bash
 cp .env.example .env   # then edit values (MONGODB_URL default: mongodb://127.0.0.1:27017/scanflow)
 npm install
-npm start              # nodemon, http://localhost:3000
+npm run dev            # tsx watch, http://localhost:3000
 ```
+
+> To run from a compiled build instead: `npm run build && npm start`.
 
 ## Endpoints
 
@@ -39,7 +41,7 @@ npm start              # nodemon, http://localhost:3000
 | POST   | /v1/auth/logout  | JWT                | Blacklist the refresh token                  |
 | GET    | /v1/auth/me      | JWT                | Current user profile                         |
 | GET    | /v1/users        | JWT + manageUsers  | Paginated user list                          |
-| GET    | /health          | Public             | Liveness probe                               |
+| GET    | /v1/health       | Public             | Liveness probe (also unversioned `/health`)  |
 
 ## Roles
 
@@ -49,17 +51,32 @@ npm start              # nodemon, http://localhost:3000
 
 ## Security notes
 
-- Every `/v1` route is authenticated by default (`src/app.js`); public routes are opt-in via `PUBLIC_PATHS`.
-- OTPs are stored as **bcrypt hashes** in `tbl_user_sessions` and consumed after a successful login — there is no hardcoded fallback.
+- Every `/v1` route is authenticated by default (`src/app.ts`); public routes are opt-in via `PUBLIC_PATHS`.
+- OTPs are stored as **bcrypt hashes** in `tbl_user_sessions` and consumed after a successful login.
 - Refresh tokens are persisted and invalidated on logout / rotation.
+- In production, an SMTP failure to deliver an OTP returns `500` (no silent fallback); in development the OTP is logged to the console.
+- Dev-only OTP bypass: when `NODE_ENV != production`, `BYPASS_EMAIL` uses the fixed `BYPASS_OTP` without email delivery (configurable in `.env`).
 - `.env` is gitignored; never commit secrets.
 
 ## Scripts
 
 ```bash
-npm start            # dev (nodemon)
-npm start:prod       # production
-npm run lint         # eslint
-npm run prettier     # format
-npm run check-all    # lint + prettier check
+npm run dev            # dev (tsx watch)
+npm run build          # compile to dist/
+npm start              # serve compiled dist (dist/index.js)
+npm start:prod         # alias for `npm start`
+npm run lint           # eslint (flat config)
+npm run prettier       # format
+npm run check-all      # lint + prettier check
+```
+
+## Docker
+
+Production/replica setup and Apache vhosts live in [`deploy/`](./deploy/README.md).
+Quick start (external Mongo required — see `deploy/README.md`):
+
+```bash
+docker network create scanflow-shared-network
+docker compose up -d --build api        # http://localhost:3000/v1/health
+docker compose --profile replica up -d  # adds http://localhost:3004/v1/health
 ```

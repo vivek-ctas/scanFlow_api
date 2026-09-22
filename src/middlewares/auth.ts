@@ -45,16 +45,5 @@ export const auth =
       )(req, res, next);
     })
       .then(() => next())
-      .catch((err) => {
-        if (err instanceof ApiError) {
-          return res.status(err.statusCode).json({
-            code: err.statusCode,
-            message: err.message,
-          });
-        }
-        return res.status(httpStatus.UNAUTHORIZED).json({
-          code: httpStatus.UNAUTHORIZED,
-          message: 'Please authenticate',
-        });
-      });
+      .catch((err) => next(err));
   };

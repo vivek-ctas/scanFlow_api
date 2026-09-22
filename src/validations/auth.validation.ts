@@ -7,6 +7,7 @@ export const register = {
     last_name: Joi.string().required(),
     email: Joi.string().required().email(),
     contact_no: Joi.string().required(),
+    business_address: Joi.string().allow('').optional(),
     password: Joi.string().custom(password).optional(),
     role: Joi.string()
       .valid('SELLER_ADMIN', 'SELLER_USER')

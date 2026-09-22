@@ -1,6 +1,5 @@
 import express from 'express';
 import helmet from 'helmet';
-import mongoSanitize from 'express-mongo-sanitize';
 import compression from 'compression';
 import cors from 'cors';
 import passport from 'passport';
@@ -12,6 +11,7 @@ import {
 } from './config/morgan.js';
 import { jwtStrategy } from './config/passport.js';
 import { authLimiter } from './middlewares/rateLimiter.js';
+import { mongoSanitize } from './middlewares/mongoSanitize.js';
 import { auth } from './middlewares/auth.js';
 import { v1Router, PUBLIC_PATHS } from './routes/v1/index.js';
 import {
@@ -21,6 +21,10 @@ import {
 import { ApiError } from './utils/ApiError.js';
 
 const app = express();
+
+if (config.behindReverseProxy) {
+  app.set('trust proxy', 1);
+}
 
 if (config.env !== 'test') {
   app.use(successHandler);
@@ -90,5 +94,3 @@ app.use(errorConverter);
 app.use(errorHandlerMiddleware);
 
 export default app;
-
-
