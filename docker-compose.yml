@@ -24,7 +24,7 @@ x-api-base: &api-base
         'CMD',
         'wget',
         '-qO-',
-        'http://127.0.0.1:${CONTAINER_PORT:-3000}/v1/health',
+        'http://127.0.0.1:${CONTAINER_PORT:-3000}/api/health',
       ]
     interval: 30s
     timeout: 5s

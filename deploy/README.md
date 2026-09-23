@@ -43,8 +43,8 @@ sudo a2ensite scanflow-api.conf && sudo systemctl reload apache2
 ## Health checks
 
 ```bash
-curl http://localhost:3000/v1/health
-curl http://localhost:3004/v1/health
+curl http://localhost:3000/api/health
+curl http://localhost:3004/api/health
 ```
 
 ## Resources

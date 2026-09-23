@@ -9,11 +9,8 @@ export const register = {
     contact_no: Joi.string().required(),
     business_address: Joi.string().allow('').optional(),
     password: Joi.string().custom(password).optional(),
-    role: Joi.string()
-      .valid('SELLER_ADMIN', 'SELLER_USER')
-      .optional()
-      .default('SELLER_USER'),
-    seller_id: Joi.string().custom(objectId).optional(),
+    role: Joi.string().valid('USER_ADMIN', 'USER').optional().default('USER'),
+    parent_id: Joi.string().custom(objectId).optional(),
   }),
 };
 

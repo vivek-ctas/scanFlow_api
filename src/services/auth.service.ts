@@ -10,7 +10,7 @@ import { logger } from '../config/logger.js';
 import { createResponse } from './common.service.js';
 import * as tokenService from './token.service.js';
 import * as emailService from './email.service.js';
-import * as userService from './user.service.js';
+import { createUser } from './admin/users.service.js';
 
 const OTP_EXPIRY_MINUTES = 5;
 
@@ -164,7 +164,7 @@ export const logout = async (refreshToken: string) => {
 };
 
 export const registerUser = async (userBody: Record<string, any>) => {
-  const result = await userService.createUser({
+  const result = await createUser({
     ...userBody,
     email: userBody.email ? normalizeEmail(userBody.email) : userBody.email,
   });
