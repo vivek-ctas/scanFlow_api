@@ -17,7 +17,7 @@ const getTransporter = () => {
 export const sendOtpEmail = async (to: string, otp: string) => {
   if (!isSmtpConfigured()) {
     logger.info(`[EMAIL-CONSOLE] OTP for ${to}: ${otp}`);
-    return { delivered: 'console' };
+    return { delivered: 'console' as const };
   }
 
   try {
@@ -29,9 +29,13 @@ export const sendOtpEmail = async (to: string, otp: string) => {
              <h2 style="letter-spacing:4px;">${otp}</h2>
              <p>This code expires in 5 minutes.</p>`,
     });
-    return { delivered: 'email' };
+    return { delivered: 'email' as const };
   } catch (error: any) {
     logger.error(`Failed to send OTP email to ${to}: ${error.message}`);
-    return { delivered: 'console' };
+    if (config.env !== 'production') {
+      logger.info(`[EMAIL-CONSOLE] OTP for ${to}: ${otp}`);
+      return { delivered: 'console' as const };
+    }
+    return { delivered: 'failed' as const };
   }
 };

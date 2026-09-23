@@ -2,9 +2,11 @@ import httpStatus from 'http-status';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import moment from 'moment';
+import config from '../config/config.js';
 import { User, UserSession, Token } from '../models/index.js';
 import { ApiError } from '../utils/ApiError.js';
 import { tokenTypes } from '../config/tokens.js';
+import { logger } from '../config/logger.js';
 import { createResponse } from './common.service.js';
 import * as tokenService from './token.service.js';
 import * as emailService from './email.service.js';
@@ -12,8 +14,16 @@ import * as userService from './user.service.js';
 
 const OTP_EXPIRY_MINUTES = 5;
 
+const normalizeEmail = (email: string) => String(email).trim().toLowerCase();
+
+const isBypassEnabled = () => config.env !== 'production';
+
 export const sendOtp = async (email: string) => {
-  const user = await User.findOne({ email, status: { $ne: 2 } });
+  const normalizedEmail = normalizeEmail(email);
+  const user = await User.findOne({
+    email: normalizedEmail,
+    status: { $ne: 2 },
+  });
   if (!user) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email is not registered');
   }
@@ -21,14 +31,38 @@ export const sendOtp = async (email: string) => {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Account is inactive');
   }
 
+  if (
+    isBypassEnabled() &&
+    config.auth.bypassEmail &&
+    normalizedEmail === normalizeEmail(config.auth.bypassEmail)
+  ) {
+    logger.info(
+      `[BYPASS] OTP skipped for ${normalizedEmail} (dev bypass email)`,
+    );
+    return createResponse(
+      httpStatus.OK,
+      'OTP sent successfully to your registered email.',
+    );
+  }
+
   const otp = crypto.randomInt(100000, 1000000).toString();
   const hashOtp = await bcrypt.hash(otp, 8);
   const expiredAt = moment().add(OTP_EXPIRY_MINUTES, 'minutes').toDate();
 
-  await UserSession.deleteMany({ email });
-  await UserSession.create({ email, hash_otp: hashOtp, expired_at: expiredAt });
+  await UserSession.deleteMany({ email: normalizedEmail });
+  await UserSession.create({
+    email: normalizedEmail,
+    hash_otp: hashOtp,
+    expired_at: expiredAt,
+  });
 
-  await emailService.sendOtpEmail(email, otp);
+  const { delivered } = await emailService.sendOtpEmail(normalizedEmail, otp);
+  if (delivered === 'failed') {
+    throw new ApiError(
+      httpStatus.INTERNAL_SERVER_ERROR,
+      'Failed to send OTP email. Please try again.',
+    );
+  }
 
   return createResponse(
     httpStatus.OK,
@@ -37,29 +71,46 @@ export const sendOtp = async (email: string) => {
 };
 
 export const verifyOtpAndLogin = async (email: string, otp: string) => {
-  const session = await UserSession.findOne({ email }).sort({ createdAt: -1 });
-  if (!session) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      'OTP not found. Please request a new OTP.',
-    );
+  const normalizedEmail = normalizeEmail(email);
+
+  if (
+    isBypassEnabled() &&
+    config.auth.bypassOtp &&
+    otp === config.auth.bypassOtp &&
+    (!config.auth.bypassEmail ||
+      normalizedEmail === normalizeEmail(config.auth.bypassEmail))
+  ) {
+    logger.info(`[BYPASS] Login via bypass OTP for ${normalizedEmail}`);
+  } else {
+    const session = await UserSession.findOne({
+      email: normalizedEmail,
+    }).sort({ createdAt: -1 });
+    if (!session) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'OTP not found. Please request a new OTP.',
+      );
+    }
+
+    if (moment().isAfter(moment(session.expired_at))) {
+      await UserSession.deleteMany({ email: normalizedEmail });
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'OTP expired. Please request a new OTP.',
+      );
+    }
+
+    const isOtpValid = await session.isOtpMatch(otp);
+    if (!isOtpValid) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid OTP.');
+    }
+    await UserSession.deleteMany({ email: normalizedEmail });
   }
 
-  if (moment().isAfter(moment(session.expired_at))) {
-    await UserSession.deleteMany({ email });
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      'OTP expired. Please request a new OTP.',
-    );
-  }
-
-  const isOtpValid = await session.isOtpMatch(otp);
-  if (!isOtpValid) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid OTP.');
-  }
-  await UserSession.deleteMany({ email });
-
-  const user = await User.findOne({ email, status: { $ne: 2 } });
+  const user = await User.findOne({
+    email: normalizedEmail,
+    status: { $ne: 2 },
+  });
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
   }
@@ -113,7 +164,10 @@ export const logout = async (refreshToken: string) => {
 };
 
 export const registerUser = async (userBody: Record<string, any>) => {
-  const result = await userService.createUser(userBody);
+  const result = await userService.createUser({
+    ...userBody,
+    email: userBody.email ? normalizeEmail(userBody.email) : userBody.email,
+  });
   const user = result.data.user;
   const tokens = await tokenService.generateAuthTokens(user);
   return createResponse(httpStatus.CREATED, 'User registered successfully.', {

@@ -26,6 +26,6 @@ const systemErrorSchema = new Schema<ISystemError>(
 systemErrorSchema.plugin(toJSON);
 
 export const SystemError = mongoose.model<ISystemError>(
-  'SystemError',
+  'tbl_systemError',
   systemErrorSchema,
 );

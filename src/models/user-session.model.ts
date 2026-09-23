@@ -45,6 +45,6 @@ userSessionSchema.methods.isOtpMatch = async function (
 userSessionSchema.plugin(toJSON);
 
 export const UserSession = mongoose.model<IUserSession>(
-  'UserSession',
+  'tbl_userSession',
   userSessionSchema,
 );

@@ -1,4 +1,4 @@
-import mongoose, { Model } from 'mongoose';
+import { Model } from 'mongoose';
 
 let globalSystemErrorModel: Model<any> | null = null;
 

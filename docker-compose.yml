@@ -1,0 +1,50 @@
+name: scanflow-api
+
+x-api-base: &api-base
+  build: .
+  image: scanflow-api:${IMAGE_TAG:-latest}
+  env_file:
+    - .env
+  environment:
+    MONGODB_URL: ${DOCKER_MONGODB_URL:-mongodb://host.docker.internal:27017/scanflow}
+  extra_hosts:
+    - 'host.docker.internal:host-gateway'
+  restart: unless-stopped
+  networks:
+    - scanflow-shared
+  deploy:
+    resources:
+      limits:
+        memory: ${MEMORY_LIMIT:-2G}
+      reservations:
+        memory: ${MEMORY_RESERVATION:-512M}
+  healthcheck:
+    test:
+      [
+        'CMD',
+        'wget',
+        '-qO-',
+        'http://127.0.0.1:${CONTAINER_PORT:-3000}/v1/health',
+      ]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 40s
+
+services:
+  api:
+    <<: *api-base
+    ports:
+      - '${HOST_PORT:-3000}:${CONTAINER_PORT:-3000}'
+
+  api-replica:
+    <<: *api-base
+    profiles:
+      - replica
+    ports:
+      - '${REPLICA_PORT:-3004}:${CONTAINER_PORT:-3000}'
+
+networks:
+  scanflow-shared:
+    external: true
+    name: scanflow-shared-network

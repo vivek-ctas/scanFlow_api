@@ -11,10 +11,13 @@ export const createUser = async (
   const normalizedBody: Partial<IUser> = {
     first_name: userBody.first_name,
     last_name: userBody.last_name,
-    email: userBody.email,
+    email: String(userBody.email || '')
+      .trim()
+      .toLowerCase(),
     contact_no: userBody.contact_no,
     password: userBody.password,
     role: userBody.role || 'SELLER_USER',
+    business_address: userBody.business_address,
     seller_id: sellerIdStr
       ? new mongoose.Types.ObjectId(sellerIdStr as unknown as string)
       : null,
@@ -56,6 +59,7 @@ export const updateUserById = async (
     'last_name',
     'email',
     'contact_no',
+    'business_address',
     'password',
     'isSuperAdmin',
     'is_seller_user',

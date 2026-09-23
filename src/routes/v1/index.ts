@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authRouter } from './auth.route.js';
 import { userRouter } from './user.route.js';
 
-export const PUBLIC_PATHS = ['/auth'];
+export const PUBLIC_PATHS = ['/auth', '/health'];
 
 const router = Router();
 
