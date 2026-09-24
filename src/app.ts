@@ -13,7 +13,7 @@ import { jwtStrategy } from './config/passport.js';
 import { authLimiter } from './middlewares/rateLimiter.js';
 import { mongoSanitize } from './middlewares/mongoSanitize.js';
 import { auth } from './middlewares/auth.js';
-import { v1Router, PUBLIC_PATHS } from './routes/v1/index.js';
+import { apiRouter, PUBLIC_PATHS } from './routes/index.js';
 import {
   errorConverter,
   errorHandler as errorHandlerMiddleware,
@@ -57,10 +57,10 @@ app.use((req, res, next) => {
 passport.use('jwt', jwtStrategy);
 
 if (config.env === 'production') {
-  app.use('/v1/auth', authLimiter);
+  app.use('/api/auth', authLimiter);
 }
 
-app.use('/v1', (req, res, next) => {
+app.use('/api', (req, res, next) => {
   const isPublic = PUBLIC_PATHS.some(
     (path) => req.path === path || req.path.startsWith(`${path}/`),
   );
@@ -70,7 +70,7 @@ app.use('/v1', (req, res, next) => {
   return auth()(req, res, next);
 });
 
-app.use('/v1', v1Router);
+app.use('/api', apiRouter);
 
 app.get('/', (req, res) => {
   res.status(httpStatus.OK).json({

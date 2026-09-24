@@ -14,8 +14,8 @@ export interface IUser extends Document {
   business_address?: string;
   role: string;
   isSuperAdmin: boolean;
-  is_seller_user: boolean;
-  seller_id?: mongoose.Types.ObjectId | null;
+  is_sub_user: boolean;
+  parent_id?: mongoose.Types.ObjectId | null;
   isEmailVerified: boolean;
   status: number;
   created_by?: mongoose.Types.ObjectId | null;
@@ -65,10 +65,10 @@ const userSchema = new Schema<IUser, IUserModel>(
         message: 'Password must contain at least one letter and one number',
       },
     },
-    role: { type: String, enum: roles, default: 'SELLER_USER' },
+    role: { type: String, enum: roles, default: 'USER' },
     isSuperAdmin: { type: Boolean, default: false },
-    is_seller_user: { type: Boolean, default: false },
-    seller_id: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    is_sub_user: { type: Boolean, default: false },
+    parent_id: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     isEmailVerified: { type: Boolean, default: false },
     status: { type: Number, default: 1 },
     created_by: { type: Schema.Types.ObjectId, default: null },

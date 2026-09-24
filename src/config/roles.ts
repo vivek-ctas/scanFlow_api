@@ -1,7 +1,7 @@
 export const allRoles = {
-  SUPER_ADMIN: ['manageUsers', 'manageRoles'],
-  SELLER_ADMIN: ['manageUsers'],
-  SELLER_USER: [],
+  SUPER_ADMIN: ['manageUsers', 'manageSubUsers'],
+  USER_ADMIN: ['manageSubUsers'],
+  USER: [],
 };
 
 export const roles = Object.keys(allRoles);
