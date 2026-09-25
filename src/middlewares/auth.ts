@@ -26,10 +26,7 @@ const verifyCallback =
         userRights.includes(requiredRight),
       );
 
-      if (
-        !hasRequiredRights &&
-        !(req.method === 'GET' && req.params.userId === user.id)
-      ) {
+      if (!hasRequiredRights) {
         return reject(new ApiError(httpStatus.FORBIDDEN, 'Forbidden'));
       }
     }

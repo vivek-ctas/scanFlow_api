@@ -3,11 +3,6 @@ import { catchAsync } from '../utils/catchAsync.js';
 import * as authService from '../services/auth.service.js';
 import { Request, Response } from 'express';
 
-export const register = catchAsync(async (req: Request, res: Response) => {
-  const result = await authService.registerUser(req.body);
-  res.status(result.status).json(result);
-});
-
 export const sendOtp = catchAsync(async (req: Request, res: Response) => {
   const result = await authService.sendOtp(req.body.email);
   res.status(result.status).json(result);

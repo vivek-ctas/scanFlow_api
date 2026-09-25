@@ -53,6 +53,24 @@ const envVarsSchema = Joi.object()
     BYPASS_OTP: Joi.string()
       .allow('')
       .description('dev-only fixed OTP accepted instead of the generated one'),
+    REDIS_URL: Joi.string()
+      .allow('')
+      .description('Redis connection URL for queues and scan quota counter'),
+    WEBHOOK_WORKER_CONCURRENCY: Joi.number()
+      .default(100)
+      .description('concurrent webhook deliveries per worker process'),
+    WEBHOOK_TIMEOUT_MS: Joi.number()
+      .default(5000)
+      .description('max ms a webhook delivery request may take'),
+    WEBHOOK_BATCH_SIZE: Joi.number()
+      .default(100)
+      .description('webhook request batching hint (reserved)'),
+    WEBHOOK_RETRY_LIMIT: Joi.number()
+      .default(3)
+      .description('webhook delivery retry attempts'),
+    SCAN_QUOTA_PERIOD: Joi.string()
+      .default('monthly')
+      .description('reset cadence for the per-organization scan counter'),
   })
   .unknown();
 
@@ -95,6 +113,16 @@ export const config = {
   auth: {
     bypassEmail: envVars.BYPASS_EMAIL,
     bypassOtp: envVars.BYPASS_OTP,
+  },
+  redis: {
+    url: envVars.REDIS_URL,
+    scanQuotaPeriod: envVars.SCAN_QUOTA_PERIOD,
+  },
+  webhook: {
+    workerConcurrency: envVars.WEBHOOK_WORKER_CONCURRENCY,
+    timeoutMs: envVars.WEBHOOK_TIMEOUT_MS,
+    batchSize: envVars.WEBHOOK_BATCH_SIZE,
+    retryLimit: envVars.WEBHOOK_RETRY_LIMIT,
   },
 };
 

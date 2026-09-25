@@ -7,11 +7,6 @@ import * as authController from '../controllers/auth.controller.js';
 const router = Router();
 
 router.post(
-  '/register',
-  validate(authValidation.register),
-  authController.register,
-);
-router.post(
   '/send-otp',
   validate(authValidation.sendOtp),
   authController.sendOtp,

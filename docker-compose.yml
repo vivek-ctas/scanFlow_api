@@ -44,6 +44,41 @@ services:
     ports:
       - '${REPLICA_PORT:-3004}:${CONTAINER_PORT:-3000}'
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - scanflow-redis-data:/data
+    networks:
+      - scanflow-shared
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-1G}
+        reservations:
+          memory: ${REDIS_MEMORY_RESERVATION:-256M}
+
+  worker:
+    <<: *api-base
+    environment:
+      MONGODB_URL: ${DOCKER_MONGODB_URL:-mongodb://host.docker.internal:27017/scanflow}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    command: ['node', 'dist/worker.js']
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  scanflow-redis-data:
+
 networks:
   scanflow-shared:
     external: true

@@ -7,14 +7,11 @@ import { User, UserSession, Token } from '../models/index.js';
 import { ApiError } from '../utils/ApiError.js';
 import { tokenTypes } from '../config/tokens.js';
 import { logger } from '../config/logger.js';
-import { createResponse } from './common.service.js';
+import { createResponse, normalizeEmail } from './common.service.js';
 import * as tokenService from './token.service.js';
 import * as emailService from './email.service.js';
-import { createUser } from './admin/users.service.js';
 
 const OTP_EXPIRY_MINUTES = 5;
-
-const normalizeEmail = (email: string) => String(email).trim().toLowerCase();
 
 const isBypassEnabled = () => config.env !== 'production';
 
@@ -161,17 +158,4 @@ export const logout = async (refreshToken: string) => {
   await refreshTokenDoc.deleteOne();
 
   return createResponse(httpStatus.OK, 'Logged out successfully.');
-};
-
-export const registerUser = async (userBody: Record<string, any>) => {
-  const result = await createUser({
-    ...userBody,
-    email: userBody.email ? normalizeEmail(userBody.email) : userBody.email,
-  });
-  const user = result.data.user;
-  const tokens = await tokenService.generateAuthTokens(user);
-  return createResponse(httpStatus.CREATED, 'User registered successfully.', {
-    user,
-    tokens,
-  });
 };
