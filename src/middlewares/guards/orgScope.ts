@@ -22,11 +22,11 @@ export const resolveOrganizationScope = (
     }
     return null;
   }
-  if (!reqUser.organizationId) {
+  if (!reqUser.organization_id) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
       'User is not scoped to an organization',
     );
   }
-  return toObjectId(String(reqUser.organizationId));
+  return toObjectId(String(reqUser.organization_id));
 };

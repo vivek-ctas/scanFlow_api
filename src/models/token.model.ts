@@ -21,7 +21,7 @@ const tokenSchema = new Schema<IToken>(
     },
     user: {
       type: Schema.Types.ObjectId,
-      ref: 'User',
+      ref: 'tbl_user',
       required: true,
     },
     type: {

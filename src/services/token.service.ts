@@ -86,13 +86,8 @@ export const generateAuthTokens = async (user: any) => {
   );
 
   return {
-    access: {
-      token: accessToken,
-      expires: accessTokenExpires.toDate(),
-    },
-    refresh: {
-      token: refreshToken,
-      expires: refreshTokenExpires.toDate(),
-    },
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expires_at: accessTokenExpires.toDate(),
   };
 };

@@ -5,21 +5,12 @@ import { paginate } from './plugins/paginate.plugin.js';
 export interface IOrganization extends Document {
   name: string;
   email?: string;
-  contactNumber?: string;
+  contact_number?: string;
   status: number;
-  scanQuota: {
-    limit: number;
-    period: string;
-    periodStart: Date;
-  };
-  scanUsage: {
-    count: number;
-    lastSyncedAt?: Date;
-  };
   created_by?: mongoose.Types.ObjectId | null;
   modified_by?: mongoose.Types.ObjectId | null;
-  createdAt: Date;
-  updatedAt: Date;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface IOrganizationModel extends Model<IOrganization> {
@@ -33,21 +24,12 @@ const organizationSchema = new Schema<IOrganization, IOrganizationModel>(
   {
     name: { type: String, required: true, trim: true },
     email: { type: String, trim: true },
-    contactNumber: { type: String, trim: true },
+    contact_number: { type: String, trim: true },
     status: { type: Number, default: 1 },
-    scanQuota: {
-      limit: { type: Number, default: 0 },
-      period: { type: String, default: 'monthly' },
-      periodStart: { type: Date, default: Date.now },
-    },
-    scanUsage: {
-      count: { type: Number, default: 0 },
-      lastSyncedAt: { type: Date },
-    },
     created_by: { type: Schema.Types.ObjectId, index: true, default: null },
     modified_by: { type: Schema.Types.ObjectId, index: true, default: null },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
 organizationSchema.plugin(toJSON);

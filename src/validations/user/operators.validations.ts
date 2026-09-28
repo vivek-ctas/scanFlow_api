@@ -15,27 +15,27 @@ export const createOperator = {
     first_name: Joi.string().required(),
     last_name: Joi.string().required(),
     email: Joi.string().required().email(),
-    contact_no: Joi.string().allow('', null).optional(),
+    contact_number: Joi.string().allow('', null).optional(),
     business_address: Joi.string().allow('', null).optional(),
     role: Joi.string()
       .valid(...operatorRoles)
       .optional()
       .default('OPERATOR'),
     status: Joi.number().integer().valid(0, 1).optional().default(1),
-    organizationId: Joi.string().custom(objectId).optional(),
+    organization_id: Joi.string().custom(objectId).optional(),
   }),
 };
 
 export const listOperators = {
   query: Joi.object().keys({
-    organizationId: Joi.string().custom(objectId).optional(),
+    organization_id: Joi.string().custom(objectId).optional(),
     search: Joi.string().optional(),
     status: Joi.number().integer().valid(0, 1, 2).optional(),
     role: Joi.string()
       .valid(...operatorRoles)
       .optional(),
-    sortBy: Joi.string().optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    sort_by: Joi.string().optional(),
+    limit: Joi.number().integer().min(1).max(1000).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
 };
@@ -43,7 +43,7 @@ export const listOperators = {
 export const getOperator = {
   ...operatorIdParams,
   query: Joi.object().keys({
-    organizationId: Joi.string().custom(objectId).optional(),
+    organization_id: Joi.string().custom(objectId).optional(),
   }),
 };
 
@@ -54,13 +54,13 @@ export const updateOperator = {
       first_name: Joi.string().optional(),
       last_name: Joi.string().optional(),
       email: Joi.string().email().optional(),
-      contact_no: Joi.string().allow('', null).optional(),
+      contact_number: Joi.string().allow('', null).optional(),
       business_address: Joi.string().allow('', null).optional(),
       role: Joi.string()
         .valid(...operatorRoles)
         .optional(),
       status: Joi.number().integer().valid(0, 1, 2).optional(),
-      isEmailVerified: Joi.boolean().optional(),
+      is_email_verified: Joi.boolean().optional(),
     })
     .min(1),
 };

@@ -64,13 +64,24 @@ const envVarsSchema = Joi.object()
       .description('max ms a webhook delivery request may take'),
     WEBHOOK_BATCH_SIZE: Joi.number()
       .default(100)
-      .description('webhook request batching hint (reserved)'),
+      .description('webhook request batching hint'),
+    WEBHOOK_BATCH_DEBOUNCE_MS: Joi.number()
+      .default(2000)
+      .description('debounce window before flushing a partial webhook batch'),
     WEBHOOK_RETRY_LIMIT: Joi.number()
       .default(3)
       .description('webhook delivery retry attempts'),
-    SCAN_QUOTA_PERIOD: Joi.string()
-      .default('monthly')
-      .description('reset cadence for the per-organization scan counter'),
+    STRIPE_SECRET_KEY: Joi.string().allow('').description('Stripe secret key'),
+    STRIPE_WEBHOOK_SECRET: Joi.string()
+      .allow('')
+      .description('Stripe webhook signing secret'),
+    RAZORPAY_KEY_ID: Joi.string().allow('').description('Razorpay key id'),
+    RAZORPAY_KEY_SECRET: Joi.string()
+      .allow('')
+      .description('Razorpay key secret'),
+    RAZORPAY_WEBHOOK_SECRET: Joi.string()
+      .allow('')
+      .description('Razorpay webhook signing secret'),
   })
   .unknown();
 
@@ -116,13 +127,22 @@ export const config = {
   },
   redis: {
     url: envVars.REDIS_URL,
-    scanQuotaPeriod: envVars.SCAN_QUOTA_PERIOD,
   },
   webhook: {
     workerConcurrency: envVars.WEBHOOK_WORKER_CONCURRENCY,
     timeoutMs: envVars.WEBHOOK_TIMEOUT_MS,
     batchSize: envVars.WEBHOOK_BATCH_SIZE,
+    batchDebounceMs: envVars.WEBHOOK_BATCH_DEBOUNCE_MS,
     retryLimit: envVars.WEBHOOK_RETRY_LIMIT,
+  },
+  stripe: {
+    secretKey: envVars.STRIPE_SECRET_KEY,
+    webhookSecret: envVars.STRIPE_WEBHOOK_SECRET,
+  },
+  razorpay: {
+    keyId: envVars.RAZORPAY_KEY_ID,
+    keySecret: envVars.RAZORPAY_KEY_SECRET,
+    webhookSecret: envVars.RAZORPAY_WEBHOOK_SECRET,
   },
 };
 

@@ -13,8 +13,8 @@ export const createScan = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const listScans = catchAsync(async (req: Request, res: Response) => {
-  const filter = pick(req.query, ['organizationId', 'userId', 'barcode']);
-  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const filter = pick(req.query, ['organization_id', 'user_id', 'barcode']);
+  const options = pick(req.query, ['sort_by', 'limit', 'page']);
   const result = await scanService.listScans(filter, options, req.user);
   res.status(result.status).json(result);
 });

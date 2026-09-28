@@ -6,7 +6,7 @@ import { Request, Response } from 'express';
 export const getWebhookConfig = catchAsync(
   async (req: Request, res: Response) => {
     const result = await webhookService.getWebhookConfig(
-      String(req.query.organizationId || ''),
+      String(req.query.organization_id || ''),
       req.user,
     );
     res.status(result.status).json(result);
@@ -23,7 +23,7 @@ export const upsertWebhookConfig = catchAsync(
 export const deleteWebhookConfig = catchAsync(
   async (req: Request, res: Response) => {
     const result = await webhookService.deleteWebhookConfig(
-      String(req.query.organizationId || ''),
+      String(req.query.organization_id || ''),
       req.user,
     );
     res.status(result.status).json(result);
@@ -32,8 +32,8 @@ export const deleteWebhookConfig = catchAsync(
 
 export const listWebhookDeliveries = catchAsync(
   async (req: Request, res: Response) => {
-    const filter = pick(req.query, ['organizationId', 'status']);
-    const options = pick(req.query, ['sortBy', 'limit', 'page']);
+    const filter = pick(req.query, ['organization_id', 'status']);
+    const options = pick(req.query, ['sort_by', 'limit', 'page']);
     const result = await webhookService.listWebhookDeliveries(
       filter,
       options,

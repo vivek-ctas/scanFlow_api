@@ -6,8 +6,10 @@ import { isSuperAdmin } from '../../middlewares/guards/isSuperAdmin.js';
 import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
 import {
   assertOrganizationActive,
-  incrementScanUsage,
+  reserveScanUsage,
+  releaseScanUsage,
 } from '../quota.service.js';
+import { populateActiveSubCache } from '../subscription.service.js';
 import { createDeliveryAndEnqueue } from './webhooks.service.js';
 
 const resolveScanOrg = (reqUser: any, explicitOrgId?: any) =>
@@ -17,16 +19,38 @@ export const createScan = async (
   userBody: Record<string, any>,
   reqUser: any,
 ) => {
-  const organizationId = resolveScanOrg(reqUser, userBody.organizationId);
-  const org = await assertOrganizationActive(String(organizationId));
+  const organizationId = resolveScanOrg(reqUser, userBody.organization_id);
+  await assertOrganizationActive(String(organizationId));
 
   const filter = {
-    organizationId,
-    clientScanId: String(userBody.clientScanId),
+    organization_id: organizationId,
+    client_scan_id: String(userBody.client_scan_id),
   };
+
+  // §4: atomic cache-backed reserve (single Redis round trip). -2 is a cold
+  // cache, not an error: fall back to Mongo exactly once, then retry once.
+  const reserve = () => reserveScanUsage(String(organizationId));
+  let reserved = await reserve();
+  if (reserved.status === 'cache_miss') {
+    const hasActive = await populateActiveSubCache(String(organizationId));
+    if (!hasActive) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'NO_ACTIVE_SUBSCRIPTION');
+    }
+    reserved = await reserve();
+    if (reserved.status === 'cache_miss') {
+      throw new ApiError(httpStatus.FORBIDDEN, 'NO_ACTIVE_SUBSCRIPTION');
+    }
+  }
+  if (reserved.status === 'quota_exceeded') {
+    throw new ApiError(httpStatus.FORBIDDEN, 'FORBIDDEN_QUOTA_EXCEEDED');
+  }
+  if (reserved.status === 'subscription_expired') {
+    throw new ApiError(httpStatus.FORBIDDEN, 'SUBSCRIPTION_EXPIRED');
+  }
 
   const existing = await Scan.findOne(filter);
   if (existing) {
+    await releaseScanUsage(String(organizationId));
     return createResponse(
       httpStatus.OK,
       'Scan already exists (duplicate ignored).',
@@ -35,21 +59,17 @@ export const createScan = async (
   }
 
   const insert = {
-    organizationId,
-    userId: reqUser._id,
-    clientScanId: String(userBody.clientScanId),
-    deviceId: userBody.deviceId,
+    organization_id: organizationId,
+    user_id: reqUser._id,
+    client_scan_id: String(userBody.client_scan_id),
+    device_id: userBody.device_id,
     barcode: userBody.barcode,
-    barcodeType: userBody.barcodeType,
-    scannedAt: userBody.scannedAt || new Date(),
+    barcode_type: userBody.barcode_type,
+    scanned_at: userBody.scanned_at || new Date(),
   };
 
   try {
     const scan = await Scan.create(insert);
-    await incrementScanUsage(
-      String(organizationId),
-      org.scanQuota?.period ?? 'monthly',
-    );
     await createDeliveryAndEnqueue(scan);
     return createResponse(
       httpStatus.ACCEPTED,
@@ -58,6 +78,7 @@ export const createScan = async (
     );
   } catch (err: any) {
     if (err && err.code === 11000) {
+      await releaseScanUsage(String(organizationId));
       const dup = await Scan.findOne(filter);
       if (!dup) throw err;
       return createResponse(
@@ -75,14 +96,14 @@ export const listScans = async (
   options: Record<string, any>,
   reqUser: any,
 ) => {
-  const orgScope = resolveOrganizationScope(reqUser, filter.organizationId);
+  const orgScope = resolveOrganizationScope(reqUser, filter.organization_id);
 
   const query: Record<string, any> = {};
   if (orgScope) {
-    query.organizationId = orgScope;
+    query.organization_id = orgScope;
   }
-  if (filter.userId) {
-    query.userId = toObjectId(filter.userId);
+  if (filter.user_id) {
+    query.user_id = toObjectId(filter.user_id);
   }
   if (filter.barcode) {
     query.barcode = filter.barcode;
@@ -93,8 +114,8 @@ export const listScans = async (
     results: scans.results,
     page: scans.page,
     limit: scans.limit,
-    totalPages: scans.totalPages,
-    totalResults: scans.totalResults,
+    total_pages: scans.total_pages,
+    total_results: scans.total_results,
   });
 };
 
@@ -105,8 +126,8 @@ export const getScanById = async (scanId: string, reqUser: any) => {
   }
   if (
     !isSuperAdmin(reqUser) &&
-    (!reqUser.organizationId ||
-      String(scan.organizationId) !== String(reqUser.organizationId))
+    (!reqUser.organization_id ||
+      String(scan.organization_id) !== String(reqUser.organization_id))
   ) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }

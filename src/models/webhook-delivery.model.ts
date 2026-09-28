@@ -3,43 +3,43 @@ import { toJSON } from './plugins/toJSON.plugin.js';
 import { paginate } from './plugins/paginate.plugin.js';
 
 export interface IWebhookDelivery extends Document {
-  eventId: string;
-  scanId: mongoose.Types.ObjectId;
-  organizationId: mongoose.Types.ObjectId;
-  attempts: number;
-  lastAttemptAt?: Date;
-  deliveredAt?: Date;
-  lastError?: string;
+  event_id: string;
+  scan_id: mongoose.Types.ObjectId;
+  organization_id: mongoose.Types.ObjectId;
+  retry_count: number;
+  last_attempt_at?: Date;
+  delivered_at?: Date;
+  last_error?: string;
   status: 'pending' | 'processing' | 'delivered' | 'failed';
-  createdAt: Date;
-  updatedAt: Date;
+  created_at: Date;
+  updated_at: Date;
   paginate: (filter: object, options: object) => Promise<any>;
 }
 
 const webhookDeliverySchema = new Schema<IWebhookDelivery>(
   {
-    eventId: { type: String, required: true, index: true },
-    scanId: { type: Schema.Types.ObjectId, ref: 'tbl_scan', required: true },
-    organizationId: {
+    event_id: { type: String, required: true, index: true },
+    scan_id: { type: Schema.Types.ObjectId, ref: 'tbl_scan', required: true },
+    organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       required: true,
       index: true,
     },
-    attempts: { type: Number, default: 0 },
-    lastAttemptAt: { type: Date },
-    deliveredAt: { type: Date },
-    lastError: { type: String },
+    retry_count: { type: Number, default: 0 },
+    last_attempt_at: { type: Date },
+    delivered_at: { type: Date },
+    last_error: { type: String },
     status: {
       type: String,
       enum: ['pending', 'processing', 'delivered', 'failed'],
       default: 'pending',
     },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
-webhookDeliverySchema.index({ status: 1, createdAt: 1 });
+webhookDeliverySchema.index({ status: 1, created_at: 1 });
 
 webhookDeliverySchema.plugin(toJSON);
 webhookDeliverySchema.plugin(paginate);

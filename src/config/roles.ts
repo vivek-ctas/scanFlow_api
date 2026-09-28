@@ -5,12 +5,16 @@ export const allRoles = {
     'manageOperators',
     'manageScans',
     'manageWebhooks',
+    'manageSubscriptions',
+    'viewSubscription',
+    'manageGuestLeads',
   ],
   ORGANIZATION_ADMIN: [
     'viewOperators',
     'manageOperators',
     'manageScans',
     'manageWebhooks',
+    'viewSubscription',
   ],
   OPERATOR: ['manageScans'],
 };

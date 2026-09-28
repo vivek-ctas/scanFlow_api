@@ -3,21 +3,21 @@ import { objectId } from '../custom.validation.js';
 
 export const createScan = {
   body: Joi.object().keys({
-    clientScanId: Joi.string().required(),
+    client_scan_id: Joi.string().required(),
     barcode: Joi.string().required(),
-    barcodeType: Joi.string().allow('', null).optional(),
-    deviceId: Joi.string().allow('', null).optional(),
-    scannedAt: Joi.date().optional(),
-    organizationId: Joi.string().custom(objectId).optional(),
+    barcode_type: Joi.string().allow('', null).optional(),
+    device_id: Joi.string().allow('', null).optional(),
+    scanned_at: Joi.date().optional(),
+    organization_id: Joi.string().custom(objectId).optional(),
   }),
 };
 
 export const listScans = {
   query: Joi.object().keys({
-    organizationId: Joi.string().custom(objectId).optional(),
-    userId: Joi.string().custom(objectId).optional(),
+    organization_id: Joi.string().custom(objectId).optional(),
+    user_id: Joi.string().custom(objectId).optional(),
     barcode: Joi.string().optional(),
-    sortBy: Joi.string().optional(),
+    sort_by: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(100).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),

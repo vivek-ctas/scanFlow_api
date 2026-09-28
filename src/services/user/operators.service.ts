@@ -26,7 +26,7 @@ export const createOperator = async (
   }
   const organizationId = resolveOrganizationScope(
     reqUser,
-    userBody.organizationId,
+    userBody.organization_id,
     { required: true },
   )!;
   const email = normalizeEmail(userBody.email);
@@ -38,12 +38,12 @@ export const createOperator = async (
     first_name: userBody.first_name,
     last_name: userBody.last_name,
     email,
-    contact_no: userBody.contact_no,
+    contact_number: userBody.contact_number,
     business_address: userBody.business_address,
     role,
-    organizationId,
-    isSuperAdmin: false,
-    isEmailVerified: false,
+    organization_id: organizationId,
+    is_super_admin: false,
+    is_email_verified: false,
     status: userBody.status ?? 1,
     created_by: reqUser._id,
   });
@@ -58,10 +58,10 @@ export const listOperators = async (
   options: Record<string, any>,
   reqUser: any,
 ) => {
-  const orgScope = resolveOrganizationScope(reqUser, filter.organizationId);
+  const orgScope = resolveOrganizationScope(reqUser, filter.organization_id);
   const query: Record<string, any> = {};
   if (orgScope) {
-    query.organizationId = orgScope;
+    query.organization_id = orgScope;
   }
   if (filter.status !== undefined) {
     query.status = Number(filter.status);
@@ -77,17 +77,20 @@ export const listOperators = async (
       { first_name: regex },
       { last_name: regex },
       { email: regex },
-      { contact_no: regex },
+      { contact_number: regex },
     ];
   }
 
-  const users = await (User as any).paginate(query, options);
+  const users = await (User as any).paginate(query, {
+    ...options,
+    populate: 'organization_id',
+  });
   return createResponse(httpStatus.OK, 'Operators fetched successfully.', {
     results: users.results,
     page: users.page,
     limit: users.limit,
-    totalPages: users.totalPages,
-    totalResults: users.totalResults,
+    total_pages: users.total_pages,
+    total_results: users.total_results,
   });
 };
 
@@ -102,7 +105,7 @@ export const getOperatorById = async (
     status: { $ne: 2 },
   };
   if (orgScope) {
-    query.organizationId = orgScope;
+    query.organization_id = orgScope;
   }
   const user = await User.findOne(query);
   if (!user) {
@@ -115,11 +118,11 @@ const OPERATOR_UPDATE_KEYS = [
   'first_name',
   'last_name',
   'email',
-  'contact_no',
+  'contact_number',
   'business_address',
   'role',
   'status',
-  'isEmailVerified',
+  'is_email_verified',
 ];
 
 export const updateOperatorById = async (
