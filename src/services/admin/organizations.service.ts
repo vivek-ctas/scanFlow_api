@@ -9,8 +9,6 @@ import {
   normalizeEmail,
   toObjectId,
 } from '../common.service.js';
-import { getPeriodScanCount } from '../quota.service.js';
-import { isSuperAdmin } from '../../middlewares/guards/isSuperAdmin.js';
 
 export const createOrganization = async (
   orgBody: Record<string, any>,
@@ -29,11 +27,6 @@ export const createOrganization = async (
     email: orgBody.email,
     contactNumber: orgBody.contactNumber,
     status: orgBody.status ?? 1,
-    scanQuota: {
-      limit: orgBody.scanQuotaLimit ?? 0,
-      period: orgBody.period ?? 'monthly',
-      periodStart: new Date(),
-    },
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
 
@@ -90,13 +83,7 @@ export const getOrganizationById = async (organizationId: string) => {
   return org;
 };
 
-const ORG_UPDATE_KEYS = [
-  'name',
-  'email',
-  'contactNumber',
-  'status',
-  'scanQuota',
-];
+const ORG_UPDATE_KEYS = ['name', 'email', 'contactNumber', 'status'];
 
 export const updateOrganizationById = async (
   organizationId: string,
@@ -135,33 +122,4 @@ export const deleteOrganizationById = async (
   org.modified_by = actorId ? toObjectId(actorId) : null;
   await org.save();
   return org;
-};
-
-export const getOrganizationUsage = async (
-  organizationId: string,
-  reqUser: any,
-) => {
-  const org = await getOrganizationById(organizationId);
-  if (
-    !isSuperAdmin(reqUser) &&
-    String(org._id) !== String(reqUser.organizationId)
-  ) {
-    throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
-  }
-  const periodCount = await getPeriodScanCount(
-    organizationId,
-    org.scanQuota?.period ?? 'monthly',
-  );
-  return createResponse(
-    httpStatus.OK,
-    'Organization usage fetched successfully.',
-    {
-      organization: org,
-      usage: {
-        periodCount,
-        quotaLimit: org.scanQuota?.limit ?? 0,
-        quotaPeriod: org.scanQuota?.period ?? 'monthly',
-      },
-    },
-  );
 };

@@ -13,11 +13,6 @@ export const createOrganization = {
     email: Joi.string().email().allow('', null).optional(),
     contactNumber: Joi.string().allow('', null).optional(),
     status: Joi.number().integer().valid(0, 1).optional().default(1),
-    scanQuotaLimit: Joi.number().integer().min(0).optional(),
-    period: Joi.string()
-      .valid('daily', 'monthly')
-      .optional()
-      .default('monthly'),
     adminEmail: Joi.string().email().required(),
     adminFirstName: Joi.string().optional(),
     adminLastName: Joi.string().optional(),
@@ -47,13 +42,6 @@ export const updateOrganization = {
       email: Joi.string().email().allow('', null).optional(),
       contactNumber: Joi.string().allow('', null).optional(),
       status: Joi.number().integer().valid(0, 1, 2).optional(),
-      scanQuota: Joi.object()
-        .keys({
-          limit: Joi.number().integer().min(0).optional(),
-          period: Joi.string().valid('daily', 'monthly').optional(),
-          periodStart: Joi.date().optional(),
-        })
-        .optional(),
     })
     .min(1),
 };

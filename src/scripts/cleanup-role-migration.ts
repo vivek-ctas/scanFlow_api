@@ -83,7 +83,6 @@ try {
       email: 'default@scanflow.com',
       contactNumber: '',
       status: 1,
-      scanQuota: { limit: 0, period: 'monthly', periodStart: new Date() },
       created_by: null,
     });
     console.log(`Created Default Organization: ${defaultOrg._id}`);

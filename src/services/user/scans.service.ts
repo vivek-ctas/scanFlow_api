@@ -6,8 +6,10 @@ import { isSuperAdmin } from '../../middlewares/guards/isSuperAdmin.js';
 import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
 import {
   assertOrganizationActive,
-  incrementScanUsage,
+  reserveScanUsage,
+  releaseScanUsage,
 } from '../quota.service.js';
+import { populateActiveSubCache } from '../subscription.service.js';
 import { createDeliveryAndEnqueue } from './webhooks.service.js';
 
 const resolveScanOrg = (reqUser: any, explicitOrgId?: any) =>
@@ -18,15 +20,37 @@ export const createScan = async (
   reqUser: any,
 ) => {
   const organizationId = resolveScanOrg(reqUser, userBody.organizationId);
-  const org = await assertOrganizationActive(String(organizationId));
+  await assertOrganizationActive(String(organizationId));
 
   const filter = {
     organizationId,
     clientScanId: String(userBody.clientScanId),
   };
 
+  // §4: atomic cache-backed reserve (single Redis round trip). -2 is a cold
+  // cache, not an error: fall back to Mongo exactly once, then retry once.
+  const reserve = () => reserveScanUsage(String(organizationId));
+  let reserved = await reserve();
+  if (reserved.status === 'cache_miss') {
+    const hasActive = await populateActiveSubCache(String(organizationId));
+    if (!hasActive) {
+      throw new ApiError(httpStatus.FORBIDDEN, 'NO_ACTIVE_SUBSCRIPTION');
+    }
+    reserved = await reserve();
+    if (reserved.status === 'cache_miss') {
+      throw new ApiError(httpStatus.FORBIDDEN, 'NO_ACTIVE_SUBSCRIPTION');
+    }
+  }
+  if (reserved.status === 'quota_exceeded') {
+    throw new ApiError(httpStatus.FORBIDDEN, 'FORBIDDEN_QUOTA_EXCEEDED');
+  }
+  if (reserved.status === 'subscription_expired') {
+    throw new ApiError(httpStatus.FORBIDDEN, 'SUBSCRIPTION_EXPIRED');
+  }
+
   const existing = await Scan.findOne(filter);
   if (existing) {
+    await releaseScanUsage(String(organizationId));
     return createResponse(
       httpStatus.OK,
       'Scan already exists (duplicate ignored).',
@@ -46,10 +70,6 @@ export const createScan = async (
 
   try {
     const scan = await Scan.create(insert);
-    await incrementScanUsage(
-      String(organizationId),
-      org.scanQuota?.period ?? 'monthly',
-    );
     await createDeliveryAndEnqueue(scan);
     return createResponse(
       httpStatus.ACCEPTED,
@@ -58,6 +78,7 @@ export const createScan = async (
     );
   } catch (err: any) {
     if (err && err.code === 11000) {
+      await releaseScanUsage(String(organizationId));
       const dup = await Scan.findOne(filter);
       if (!dup) throw err;
       return createResponse(

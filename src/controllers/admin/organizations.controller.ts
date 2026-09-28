@@ -4,6 +4,7 @@ import { pick } from '../../utils/pick.js';
 import * as organizationService from '../../services/admin/organizations.service.js';
 import { createResponse } from '../../services/common.service.js';
 import { Request, Response } from 'express';
+import * as subscriptionController from './subscription.controller.js';
 
 const orgIdParam = (req: Request) => String(req.params.organizationId);
 const getActorId = (req: Request) => (req.user as any)?._id;
@@ -86,12 +87,4 @@ export const deleteOrganization = catchAsync(
   },
 );
 
-export const getOrganizationUsage = catchAsync(
-  async (req: Request, res: Response) => {
-    const result = await organizationService.getOrganizationUsage(
-      orgIdParam(req),
-      req.user,
-    );
-    res.status(result.status).json(result);
-  },
-);
+export const getOrganizationUsage = subscriptionController.getOrganizationUsage;
