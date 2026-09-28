@@ -73,7 +73,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     is_super_admin: { type: Boolean, default: false },
     organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       default: null,
     },
     is_email_verified: { type: Boolean, default: false },

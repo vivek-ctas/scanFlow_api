@@ -17,7 +17,7 @@ const webhookConfigSchema = new Schema<IWebhookConfig>(
   {
     organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       required: true,
       unique: true,
     },

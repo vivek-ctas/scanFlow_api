@@ -42,7 +42,7 @@ const paymentSchema = new Schema<IPayment, IPaymentModel>(
     },
     organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       default: null,
     },
     plan_id: { type: Schema.Types.ObjectId, ref: 'tbl_plan', required: true },

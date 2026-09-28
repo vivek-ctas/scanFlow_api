@@ -576,12 +576,3 @@ export const getOrganizationUsage = async (organizationId: string) => {
     },
   );
 };
-
-export const listPlans = async () => {
-  const plans = await Plan.find({ status: 1, is_custom_plan: false }).sort({
-    price: 1,
-  });
-  return createResponse(httpStatus.OK, 'Plans fetched successfully.', {
-    plans,
-  });
-};

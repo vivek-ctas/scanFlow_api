@@ -25,7 +25,7 @@ export const listOrganizations = {
     search: Joi.string().optional(),
     status: Joi.number().integer().valid(0, 1, 2).optional(),
     sort_by: Joi.string().optional(),
-    limit: Joi.number().integer().min(1).max(100).optional(),
+    limit: Joi.number().integer().min(1).max(1000).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
 };

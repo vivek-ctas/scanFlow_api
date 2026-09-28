@@ -22,7 +22,7 @@ const webhookDeliverySchema = new Schema<IWebhookDelivery>(
     scan_id: { type: Schema.Types.ObjectId, ref: 'tbl_scan', required: true },
     organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       required: true,
       index: true,
     },

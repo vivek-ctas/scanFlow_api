@@ -42,7 +42,7 @@ const subscriptionSchema = new Schema<ISubscription, ISubscriptionModel>(
   {
     organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       required: true,
     },
     plan_id: { type: Schema.Types.ObjectId, ref: 'tbl_plan', required: true },

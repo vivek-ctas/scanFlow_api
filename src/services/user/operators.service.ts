@@ -81,7 +81,10 @@ export const listOperators = async (
     ];
   }
 
-  const users = await (User as any).paginate(query, options);
+  const users = await (User as any).paginate(query, {
+    ...options,
+    populate: 'organization_id',
+  });
   return createResponse(httpStatus.OK, 'Operators fetched successfully.', {
     results: users.results,
     page: users.page,

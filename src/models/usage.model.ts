@@ -30,7 +30,7 @@ const usageSchema = new Schema<IUsage, IUsageModel>(
     feature_name: { type: String, default: 'scan', trim: true },
     organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       required: true,
       index: true,
     },

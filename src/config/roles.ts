@@ -7,6 +7,7 @@ export const allRoles = {
     'manageWebhooks',
     'manageSubscriptions',
     'viewSubscription',
+    'manageGuestLeads',
   ],
   ORGANIZATION_ADMIN: [
     'viewOperators',

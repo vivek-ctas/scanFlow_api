@@ -25,7 +25,7 @@ const scanSchema = new Schema<IScan, IScanModel>(
   {
     organization_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Organization',
+      ref: 'tbl_organization',
       required: true,
     },
     user_id: { type: Schema.Types.ObjectId, ref: 'tbl_user', required: true },

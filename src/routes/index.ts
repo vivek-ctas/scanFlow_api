@@ -6,6 +6,7 @@ import { scansRouter } from './user/scans.route.js';
 import { webhooksRouter } from './user/webhooks.route.js';
 import { publicCheckoutRouter } from './public-checkout.route.js';
 import { plansRouter } from './admin/plans.route.js';
+import { guestLeadsRouter } from './admin/guest-leads.route.js';
 
 export const PUBLIC_PATHS = ['/auth', '/health', '/public-checkout'];
 
@@ -18,6 +19,7 @@ router.use('/scans', scansRouter);
 router.use('/webhooks', webhooksRouter);
 router.use('/public-checkout', publicCheckoutRouter);
 router.use('/plans', plansRouter);
+router.use('/guest-leads', guestLeadsRouter);
 
 router.get('/health', (req, res) => {
   res.status(200).json({
