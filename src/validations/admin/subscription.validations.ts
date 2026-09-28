@@ -7,6 +7,8 @@ const subscriptionParams = {
   }),
 };
 
+const billingCycle = Joi.string().valid('month', 'quarterly');
+
 export const getSubscription = {
   ...subscriptionParams,
 };
@@ -17,9 +19,12 @@ export const getOrganizationUsage = {
 
 export const assignPlan = {
   ...subscriptionParams,
-  body: Joi.object().keys({
-    planId: Joi.string().custom(objectId).required(),
-  }),
+  body: Joi.object()
+    .keys({
+      plan_id: Joi.string().custom(objectId).required(),
+      billing_cycle: billingCycle.optional().default('month'),
+    })
+    .min(1),
 };
 
 export const renewSubscription = {
@@ -29,7 +34,8 @@ export const renewSubscription = {
       mode: Joi.string()
         .valid('continue', 'promote', 'recreate')
         .default('continue'),
-      planId: Joi.string().custom(objectId).optional(),
+      plan_id: Joi.string().custom(objectId).optional(),
+      billing_cycle: billingCycle.optional(),
     })
     .min(1),
 };
@@ -47,8 +53,9 @@ export const forceActivateSubscription = {
   ...subscriptionParams,
   body: Joi.object()
     .keys({
-      planId: Joi.string().custom(objectId).required(),
-      trialDays: Joi.number().integer().min(0).optional().default(0),
+      plan_id: Joi.string().custom(objectId).required(),
+      billing_cycle: billingCycle.optional().default('month'),
+      trial_days: Joi.number().integer().min(0).optional().default(0),
     })
     .min(1),
 };

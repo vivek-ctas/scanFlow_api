@@ -15,12 +15,12 @@ export const verifyOtp = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const refreshTokens = catchAsync(async (req: Request, res: Response) => {
-  const result = await authService.refreshAuth(req.body.refreshToken);
+  const result = await authService.refreshAuth(req.body.refresh_token);
   res.status(result.status).json(result);
 });
 
 export const logout = catchAsync(async (req: Request, res: Response) => {
-  const result = await authService.logout(req.body.refreshToken);
+  const result = await authService.logout(req.body.refresh_token);
   res.status(result.status).json(result);
 });
 

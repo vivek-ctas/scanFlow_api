@@ -11,12 +11,12 @@ export const createOrganization = {
   body: Joi.object().keys({
     name: Joi.string().required(),
     email: Joi.string().email().allow('', null).optional(),
-    contactNumber: Joi.string().allow('', null).optional(),
+    contact_number: Joi.string().allow('', null).optional(),
     status: Joi.number().integer().valid(0, 1).optional().default(1),
-    adminEmail: Joi.string().email().required(),
-    adminFirstName: Joi.string().optional(),
-    adminLastName: Joi.string().optional(),
-    adminContactNo: Joi.string().allow('', null).optional(),
+    admin_email: Joi.string().email().required(),
+    admin_first_name: Joi.string().optional(),
+    admin_last_name: Joi.string().optional(),
+    admin_contact_no: Joi.string().allow('', null).optional(),
   }),
 };
 
@@ -24,7 +24,7 @@ export const listOrganizations = {
   query: Joi.object().keys({
     search: Joi.string().optional(),
     status: Joi.number().integer().valid(0, 1, 2).optional(),
-    sortBy: Joi.string().optional(),
+    sort_by: Joi.string().optional(),
     limit: Joi.number().integer().min(1).max(100).optional(),
     page: Joi.number().integer().min(1).optional(),
   }),
@@ -40,7 +40,7 @@ export const updateOrganization = {
     .keys({
       name: Joi.string().optional(),
       email: Joi.string().email().allow('', null).optional(),
-      contactNumber: Joi.string().allow('', null).optional(),
+      contact_number: Joi.string().allow('', null).optional(),
       status: Joi.number().integer().valid(0, 1, 2).optional(),
     })
     .min(1),

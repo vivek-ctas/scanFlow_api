@@ -19,12 +19,12 @@ export const createScan = async (
   userBody: Record<string, any>,
   reqUser: any,
 ) => {
-  const organizationId = resolveScanOrg(reqUser, userBody.organizationId);
+  const organizationId = resolveScanOrg(reqUser, userBody.organization_id);
   await assertOrganizationActive(String(organizationId));
 
   const filter = {
-    organizationId,
-    clientScanId: String(userBody.clientScanId),
+    organization_id: organizationId,
+    client_scan_id: String(userBody.client_scan_id),
   };
 
   // §4: atomic cache-backed reserve (single Redis round trip). -2 is a cold
@@ -59,13 +59,13 @@ export const createScan = async (
   }
 
   const insert = {
-    organizationId,
-    userId: reqUser._id,
-    clientScanId: String(userBody.clientScanId),
-    deviceId: userBody.deviceId,
+    organization_id: organizationId,
+    user_id: reqUser._id,
+    client_scan_id: String(userBody.client_scan_id),
+    device_id: userBody.device_id,
     barcode: userBody.barcode,
-    barcodeType: userBody.barcodeType,
-    scannedAt: userBody.scannedAt || new Date(),
+    barcode_type: userBody.barcode_type,
+    scanned_at: userBody.scanned_at || new Date(),
   };
 
   try {
@@ -96,14 +96,14 @@ export const listScans = async (
   options: Record<string, any>,
   reqUser: any,
 ) => {
-  const orgScope = resolveOrganizationScope(reqUser, filter.organizationId);
+  const orgScope = resolveOrganizationScope(reqUser, filter.organization_id);
 
   const query: Record<string, any> = {};
   if (orgScope) {
-    query.organizationId = orgScope;
+    query.organization_id = orgScope;
   }
-  if (filter.userId) {
-    query.userId = toObjectId(filter.userId);
+  if (filter.user_id) {
+    query.user_id = toObjectId(filter.user_id);
   }
   if (filter.barcode) {
     query.barcode = filter.barcode;
@@ -114,8 +114,8 @@ export const listScans = async (
     results: scans.results,
     page: scans.page,
     limit: scans.limit,
-    totalPages: scans.totalPages,
-    totalResults: scans.totalResults,
+    total_pages: scans.total_pages,
+    total_results: scans.total_results,
   });
 };
 
@@ -126,8 +126,8 @@ export const getScanById = async (scanId: string, reqUser: any) => {
   }
   if (
     !isSuperAdmin(reqUser) &&
-    (!reqUser.organizationId ||
-      String(scan.organizationId) !== String(reqUser.organizationId))
+    (!reqUser.organization_id ||
+      String(scan.organization_id) !== String(reqUser.organization_id))
   ) {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }

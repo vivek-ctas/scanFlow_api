@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
+import { createPlan } from './helpers.js';
 import {
-  createOrg,
-  createPlan,
-  createAdminUser,
-  createUser,
-  grant,
-} from './helpers.js';
-import { GuestLead, Organization, Payment, Subscription } from '../src/models/index.js';
+  GuestLead,
+  Organization,
+  Payment,
+  Subscription,
+} from '../src/models/index.js';
 
 const state = vi.hoisted(() => {
   return {
@@ -17,7 +16,6 @@ const state = vi.hoisted(() => {
     stripeSession: vi.fn(),
     razorVerifyWebhook: vi.fn(),
     razorVerifyPayment: vi.fn(),
-    razorFetchOrder: vi.fn(),
     razorCreateOrder: vi.fn(),
   };
 });
@@ -33,7 +31,6 @@ vi.mock('../src/services/razorpay.service.js', () => ({
   isRazorpayConfigured: () => true,
   getRazorpay: () => ({}),
   createRazorpayOrder: state.razorCreateOrder,
-  fetchRazorpayOrder: state.razorFetchOrder,
   verifyRazorpayWebhookSignature: state.razorVerifyWebhook,
   verifyRazorpayPaymentSignature: state.razorVerifyPayment,
 }));
@@ -51,65 +48,78 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
       }
       return {
         type: 'checkout.session.completed',
-        id: `evt_${state.leadId}`,
+        id: 'evt_test',
         data: {
           object: {
-            metadata: { lead_id: state.leadId },
+            id: 'cs_test',
             amount_total: 1000,
             currency: 'inr',
           },
         },
       };
     });
-    state.razorCreateOrder.mockReset().mockImplementation(async ({ leadId }) => ({
+    state.razorCreateOrder.mockReset().mockImplementation(async (_args) => ({
       id: 'order_test',
       amount: 1000,
-      receipt: String(leadId),
     }));
-    state.razorVerifyWebhook.mockReset().mockImplementation((_body, sig) => sig === 'valid');
+    state.razorVerifyWebhook
+      .mockReset()
+      .mockImplementation((_body, sig) => sig === 'valid');
     state.razorVerifyPayment.mockReset().mockReturnValue(true);
-    state.razorFetchOrder.mockReset().mockImplementation(async (orderId) => ({
-      id: orderId,
-      receipt: state.leadId,
-    }));
   });
 
-  const seedLead = async (gateway = 'stripe') => {
-    const plan = await createPlan({ amount: 10 });
+  const seedLead = async (gateway: 'stripe' | 'razorpay' = 'stripe') => {
+    const plan = await createPlan({ price: 10 });
     const lead = await GuestLead.create({
-      firstName: 'First',
-      lastName: 'Guest',
+      first_name: 'First',
+      last_name: 'Guest',
       email: 'guest-pay@example.com',
-      phone: '9999999999',
-      company: 'Guest Co',
-      planId: plan._id,
-      trialDays: plan.trialDays,
+      contact_number: '9999999999',
+      company_name: 'Guest Co',
+      plan_id: plan._id,
+      currency_code: 'inr',
+      trial_days: plan.trial_days,
       status: 'initiated',
+    });
+    await Payment.create({
+      lead_id: lead._id,
+      plan_id: plan._id,
+      gateway,
+      order_id: gateway === 'stripe' ? 'cs_test' : 'order_test',
+      price: 10,
+      currency_code: 'inr',
+      billing_cycle: 'month',
+      status: 'CREATED',
     });
     state.leadId = String(lead._id);
     return { plan, lead };
   };
 
   it('checkout endpoint creates an initiated lead + CREATED payment row', async () => {
-    const plan = await createPlan({ amount: 10 });
+    const plan = await createPlan({ price: 10 });
     const res = await request(app)
       .post('/api/public-checkout/subscribe')
       .send({
-        firstName: 'Jane',
-        lastName: 'Doe',
+        first_name: 'Jane',
+        last_name: 'Doe',
         email: 'jane@example.com',
-        phone: '8888888888',
-        company: 'Jane Co',
-        planId: String(plan._id),
+        contact_number: '8888888888',
+        company_name: 'Jane Co',
+        plan_id: String(plan._id),
+        billing_cycle: 'month',
         gateway: 'stripe',
-        successUrl: 'https://app.example.com/success',
-        cancelUrl: 'https://app.example.com/cancel',
+        success_url: 'https://app.example.com/success',
+        cancel_url: 'https://app.example.com/cancel',
       });
     expect(res.status).toBe(201);
     expect(res.body.data.lead.status).toBe('initiated');
-    expect(res.body.data.checkout.sessionId).toBe('cs_test');
-    const payment = await Payment.findOne({ gateway: 'stripe', status: 'CREATED' });
+    expect(res.body.data.checkout.session_id).toBe('cs_test');
+    const payment = await Payment.findOne({
+      gateway: 'stripe',
+      status: 'CREATED',
+    });
     expect(payment).toBeTruthy();
+    expect(payment?.order_id).toBe('cs_test');
   });
 
   it('9. stripe webhook provisions org + active subscription exactly once', async () => {
@@ -128,12 +138,13 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
 
     const orgs = await Organization.find({ email: lead.email });
     expect(orgs).toHaveLength(1);
-    const subs = await Subscription.find({ organizationId: orgs[0]?._id });
+    const subs = await Subscription.find({ organization_id: orgs[0]?._id });
     expect(subs).toHaveLength(1);
     expect(subs[0].status).toBe('active');
-    const payments = await Payment.find({ gatewayEventId: 'evt_' + lead._id });
+    const payments = await Payment.find({ order_id: 'cs_test' });
     expect(payments).toHaveLength(1);
     expect(payments[0].status).toBe('TXN_SUCCESS');
+    expect(payments[0].transaction_id).toBe('evt_test');
     const refreshed = await GuestLead.findById(lead._id);
     expect(refreshed?.status).toBe('success');
   });
@@ -144,9 +155,14 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
       event: 'payment.captured',
       payload: {
         payment: {
-          entity: { id: 'pay_123', order_id: 'order_test', amount: 1000, currency: 'INR', status: 'captured' },
+          entity: {
+            id: 'pay_123',
+            order_id: 'order_test',
+            amount: 1000,
+            currency: 'INR',
+            status: 'captured',
+          },
         },
-        order: { entity: { receipt: String(lead._id) } },
       },
     });
     const post = () =>
@@ -160,25 +176,46 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
 
     const orgs = await Organization.find({ email: lead.email });
     expect(orgs).toHaveLength(1);
-    expect(await Subscription.countDocuments({ organizationId: orgs[0]?._id })).toBe(1);
-    const payments = await Payment.find({ gatewayEventId: 'pay_123' });
+    expect(
+      await Subscription.countDocuments({ organization_id: orgs[0]?._id }),
+    ).toBe(1);
+    const payments = await Payment.find({ order_id: 'order_test' });
     expect(payments).toHaveLength(1);
+    expect(payments[0].transaction_id).toBe('pay_123');
 
     // second payment reuses the existing org (fresh lead, same email)
     const lead2 = await GuestLead.create({
-      firstName: 'Second',
-      lastName: 'Guest',
+      first_name: 'Second',
+      last_name: 'Guest',
       email: lead.email,
-      planId: plan._id,
-      trialDays: plan.trialDays,
+      plan_id: plan._id,
+      currency_code: 'inr',
+      trial_days: plan.trial_days,
       status: 'initiated',
+    });
+    await Payment.create({
+      lead_id: lead2._id,
+      plan_id: plan._id,
+      gateway: 'razorpay',
+      order_id: 'order_test2',
+      price: 10,
+      currency_code: 'inr',
+      billing_cycle: 'month',
+      status: 'CREATED',
     });
     state.leadId = String(lead2._id);
     const body2 = JSON.stringify({
       event: 'payment.captured',
       payload: {
-        payment: { entity: { id: 'pay_456', order_id: 'order_test2', amount: 2000, currency: 'INR', status: 'captured' } },
-        order: { entity: { receipt: String(lead2._id) } },
+        payment: {
+          entity: {
+            id: 'pay_456',
+            order_id: 'order_test2',
+            amount: 2000,
+            currency: 'INR',
+            status: 'captured',
+          },
+        },
       },
     });
     const res2 = await request(app)
@@ -188,11 +225,11 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
       .send(body2);
     expect(res2.status).toBe(200);
     expect(await Organization.countDocuments({ email: lead.email })).toBe(1);
-    expect(await Payment.countDocuments({ leadId: lead2._id })).toBe(1);
+    expect(await Payment.countDocuments({ lead_id: lead2._id })).toBe(1);
   });
 
   it('11. duplicate gateway event id is idempotent (no double provision)', async () => {
-    const { lead } = await seedLead('stripe');
+    await seedLead('stripe');
     const post = () =>
       request(app)
         .post('/api/public-checkout/webhooks/stripe')
@@ -201,7 +238,7 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
     await post();
     await post();
     await post();
-    expect(await Organization.countDocuments({ email: lead.email })).toBe(1);
+    expect(await Organization.countDocuments()).toBe(1);
     expect(await Subscription.countDocuments()).toBe(1);
     expect(await Payment.countDocuments({ status: 'TXN_SUCCESS' })).toBe(1);
   });
@@ -217,19 +254,35 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
     const razorRes = await request(app)
       .post('/api/public-checkout/webhooks/razorpay')
       .set('x-razorpay-signature', 'forged')
-      .send({ event: 'payment.captured', payload: { payment: { entity: { id: 'p', order_id: 'o', status: 'captured' } } } });
+      .send({
+        event: 'payment.captured',
+        payload: {
+          payment: { entity: { id: 'p', order_id: 'o', status: 'captured' } },
+        },
+      });
     expect(razorRes.status).toBe(400);
   });
 
-  it('13. provisioning failure marks lead failed + payment FAILED, no org/sub', async () => {
-    const plan = await createPlan({ isActive: false });
+  it('13. provisioning failure marks lead failed + payment FAILED, no sub', async () => {
+    const plan = await createPlan({ status: 0 });
     const lead = await GuestLead.create({
-      firstName: 'Fail',
-      lastName: 'Lead',
+      first_name: 'Fail',
+      last_name: 'Lead',
       email: 'fail-lead@example.com',
-      planId: plan._id,
-      trialDays: 0,
+      plan_id: plan._id,
+      currency_code: 'inr',
+      trial_days: 0,
       status: 'initiated',
+    });
+    await Payment.create({
+      lead_id: lead._id,
+      plan_id: plan._id,
+      gateway: 'stripe',
+      order_id: 'cs_test',
+      price: 10,
+      currency_code: 'inr',
+      billing_cycle: 'month',
+      status: 'CREATED',
     });
     state.leadId = String(lead._id);
     const res = await request(app)
@@ -239,9 +292,8 @@ describe('public checkout + gateway provisioning (§6/§7)', () => {
     expect(res.status).toBe(502);
     const refreshed = await GuestLead.findById(lead._id);
     expect(refreshed?.status).toBe('failed');
-    const payment = await Payment.findOne({ leadId: lead._id });
+    const payment = await Payment.findOne({ lead_id: lead._id });
     expect(payment?.status).toBe('FAILED');
-    expect(await Organization.countDocuments({ email: lead.email })).toBe(1);
     expect(await Subscription.countDocuments()).toBe(0);
   });
 });

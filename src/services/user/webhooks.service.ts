@@ -14,7 +14,7 @@ export const getWebhookConfig = async (
   const orgScope = resolveOrganizationScope(reqUser, organizationId, {
     required: true,
   })!;
-  const config = await WebhookConfig.findOne({ organizationId: orgScope });
+  const config = await WebhookConfig.findOne({ organization_id: orgScope });
   return createResponse(httpStatus.OK, 'Webhook config fetched successfully.', {
     config,
   });
@@ -24,17 +24,17 @@ export const upsertWebhookConfig = async (
   body: Record<string, any>,
   reqUser: any,
 ) => {
-  const orgScope = resolveOrganizationScope(reqUser, body.organizationId, {
+  const orgScope = resolveOrganizationScope(reqUser, body.organization_id, {
     required: true,
   })!;
-  const existing = await WebhookConfig.findOne({ organizationId: orgScope });
+  const existing = await WebhookConfig.findOne({ organization_id: orgScope });
 
   const payload: Record<string, any> = {
-    endpointUrl: body.endpointUrl,
+    endpoint_url: body.endpoint_url,
     enabled: body.enabled,
-    timeoutMs: body.timeoutMs,
-    batchSize: body.batchSize,
-    retryLimit: body.retryLimit,
+    timeout_ms: body.timeout_ms,
+    batch_size: body.batch_size,
+    retry_limit: body.retry_limit,
   };
   if (body.secret !== undefined) {
     payload.secret = body.secret;
@@ -47,7 +47,7 @@ export const upsertWebhookConfig = async (
     config = existing;
   } else {
     config = await WebhookConfig.create({
-      organizationId: orgScope,
+      organization_id: orgScope,
       ...payload,
     });
   }
@@ -64,7 +64,7 @@ export const deleteWebhookConfig = async (
   const orgScope = resolveOrganizationScope(reqUser, organizationId, {
     required: true,
   })!;
-  const config = await WebhookConfig.findOne({ organizationId: orgScope });
+  const config = await WebhookConfig.findOne({ organization_id: orgScope });
   if (!config) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Webhook config not found');
   }
@@ -77,10 +77,10 @@ export const listWebhookDeliveries = async (
   options: Record<string, any>,
   reqUser: any,
 ) => {
-  const orgScope = resolveOrganizationScope(reqUser, filter.organizationId, {
+  const orgScope = resolveOrganizationScope(reqUser, filter.organization_id, {
     required: true,
   })!;
-  const query: Record<string, any> = { organizationId: orgScope };
+  const query: Record<string, any> = { organization_id: orgScope };
   if (filter.status) {
     query.status = filter.status;
   }
@@ -93,23 +93,23 @@ export const listWebhookDeliveries = async (
       results: deliveries.results,
       page: deliveries.page,
       limit: deliveries.limit,
-      totalPages: deliveries.totalPages,
-      totalResults: deliveries.totalResults,
+      total_pages: deliveries.total_pages,
+      total_results: deliveries.total_results,
     },
   );
 };
 
 export const createDeliveryAndEnqueue = async (scan: any) => {
   const delivery = await WebhookDelivery.create({
-    eventId: crypto.randomUUID(),
-    scanId: scan._id,
-    organizationId: scan.organizationId,
+    event_id: crypto.randomUUID(),
+    scan_id: scan._id,
+    organization_id: scan.organization_id,
     status: 'pending',
   });
   await enqueueScanWebhook({
-    eventId: delivery.eventId,
-    scanId: String(scan._id),
-    organizationId: String(scan.organizationId),
+    event_id: delivery.event_id,
+    scan_id: String(scan._id),
+    organization_id: String(scan.organization_id),
   });
   return delivery;
 };

@@ -22,7 +22,7 @@ export const createOrganization = catchAsync(
 export const listOrganizations = catchAsync(
   async (req: Request, res: Response) => {
     const filter = pick(req.query, ['search', 'status']);
-    const options = pick(req.query, ['sortBy', 'limit', 'page']);
+    const options = pick(req.query, ['sort_by', 'limit', 'page']);
     const result = await organizationService.listOrganizations(filter, options);
     res.status(result.status).json(result);
   },

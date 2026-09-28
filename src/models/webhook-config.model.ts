@@ -2,26 +2,26 @@ import mongoose, { Document, Schema } from 'mongoose';
 import { toJSON } from './plugins/toJSON.plugin.js';
 
 export interface IWebhookConfig extends Document {
-  organizationId: mongoose.Types.ObjectId;
-  endpointUrl: string;
+  organization_id: mongoose.Types.ObjectId;
+  endpoint_url: string;
   secret?: string;
   enabled: boolean;
-  timeoutMs: number;
-  batchSize: number;
-  retryLimit: number;
-  createdAt: Date;
-  updatedAt: Date;
+  timeout_ms: number;
+  batch_size: number;
+  retry_limit: number;
+  created_at: Date;
+  updated_at: Date;
 }
 
 const webhookConfigSchema = new Schema<IWebhookConfig>(
   {
-    organizationId: {
+    organization_id: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
       required: true,
       unique: true,
     },
-    endpointUrl: { type: String, required: true, trim: true },
+    endpoint_url: { type: String, required: true, trim: true },
     secret: {
       type: String,
       trim: true,
@@ -29,11 +29,11 @@ const webhookConfigSchema = new Schema<IWebhookConfig>(
       select: false,
     },
     enabled: { type: Boolean, default: true },
-    timeoutMs: { type: Number, default: 5000 },
-    batchSize: { type: Number, default: 100 },
-    retryLimit: { type: Number, default: 3 },
+    timeout_ms: { type: Number, default: 5000 },
+    batch_size: { type: Number, default: 100 },
+    retry_limit: { type: Number, default: 3 },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
 webhookConfigSchema.plugin(toJSON);

@@ -6,72 +6,87 @@ import { ApiError } from '../utils/ApiError.js';
 import { getRedis, isRedisConfigured } from '../queues/redis.js';
 import { logger } from '../config/logger.js';
 
-export interface PeriodWindow {
-  key: string;
-  start: Date;
-}
-
-export const periodWindow = (
-  period: string = 'monthly',
-  date: Date = new Date(),
-): PeriodWindow => {
-  if (period === 'daily') {
-    const key = date.toISOString().slice(0, 10);
-    const start = new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-    );
-    return { key, start };
-  }
-  if (period === 'yearly') {
-    const key = String(date.getUTCFullYear());
-    return {
-      key,
-      start: new Date(Date.UTC(date.getUTCFullYear(), 0, 1)),
-    };
-  }
-  const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-  return {
-    key,
-    start: new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)),
-  };
-};
-
-export const redisScanKey = (
-  organizationId: string,
-  period: string = 'monthly',
-): string => {
-  const { key } = periodWindow(period);
-  return `org:${organizationId}:scans:${period}:${key}`;
-};
-
 export const activeSubscriptionCacheKey = (organizationId: string): string =>
   `org:${organizationId}:activeSub`;
 
-/** Writes the active-subscription cache hash: limit + expiresAt + period (epoch ms). */
+const EXPIRY_GRACE_MS = 3600000;
+
+export interface ActiveSubCache {
+  scanLimit: number;
+  expiresAt: number;
+  used: number;
+}
+
+/**
+ * Writes the active-subscription cache hash (limit + expiresAt + used).
+ * `resetUsed` zeroes the counter (new period: grant/promote/force-activate).
+ * Otherwise the current `used` value is preserved (renewal) unless a
+ * caller-supplied `used` overrides it (cold-cache seed).
+ */
 export const writeActiveSubscriptionCache = async (
   organizationId: string,
   scanLimit: number,
   expiresAt: Date,
-  period: string = 'monthly',
+  resetUsed: boolean = true,
+  used?: number,
 ): Promise<void> => {
   if (!isRedisConfigured()) {
     return;
   }
   const redis = getRedis();
+  const key = activeSubscriptionCacheKey(organizationId);
   try {
-    await redis.hset(
-      activeSubscriptionCacheKey(organizationId),
-      'limit',
-      String(scanLimit),
-      'expiresAt',
-      String(expiresAt.getTime()),
-      'period',
-      period,
-    );
+    const fields: Record<string, string> = {
+      limit: String(scanLimit),
+      expiresAt: String(expiresAt.getTime()),
+    };
+    if (resetUsed) {
+      fields.used = '0';
+    } else {
+      const existing = await redis.hget(key, 'used');
+      fields.used = String(used ?? (existing !== null ? Number(existing) : 0));
+    }
+    await redis.hset(key, fields);
+    await redis.pexpireat(key, expiresAt.getTime() + EXPIRY_GRACE_MS);
   } catch (err: any) {
     logger.error(
       `[QUOTA] activeSub cache write failed for ${organizationId}: ${err.message}`,
     );
+  }
+};
+
+/** Reads the active-subscription cache hash; null when absent/unconfigured. */
+export const readActiveSubUsage = async (
+  organizationId: string,
+  _sub?: {
+    started_at: Date;
+    expires_at: Date;
+    features: { scan_limit: number }[];
+  },
+): Promise<ActiveSubCache | null> => {
+  if (!isRedisConfigured()) {
+    return null;
+  }
+  const redis = getRedis();
+  try {
+    const raw = await redis.hmget(
+      activeSubscriptionCacheKey(organizationId),
+      'limit',
+      'expiresAt',
+      'used',
+    );
+    const scanLimit = parseInt(String(raw[0]), 10);
+    const expiresAt = parseInt(String(raw[1]), 10);
+    const used = parseInt(String(raw[2] ?? '0'), 10);
+    if (Number.isNaN(expiresAt)) {
+      return null;
+    }
+    return { scanLimit, expiresAt, used };
+  } catch (err: any) {
+    logger.error(
+      `[QUOTA] activeSub cache read failed for ${organizationId}: ${err.message}`,
+    );
+    return null;
   }
 };
 
@@ -92,56 +107,26 @@ export const deleteActiveSubscriptionCache = async (
   }
 };
 
-// Counter keys embed the period window (daily/monthly/yearly), so the Lua
-// derives the full key from KEYS[1] (the org prefix) + the cached period with
-// no extra round trip. TTL is a generous upper bound; the window boundary is
-// what actually resets the counter.
-const COUNTER_TTL_SECONDS = 380 * 86400;
-
+// Atomic quota check-and-increment. The counter lives in the same hash as the
+// window bounds, so there is exactly one key. Returns:
+//  -1 quota exceeded / -2 cache miss / -3 subscription expired / positive new count.
+// `limit === 0` means unlimited (plan convention).
 const RESERVE_SCRIPT = `
-local function civilFromDays(days)
-  local z = days + 719468
-  local era = math.floor(z / 146097)
-  local doe = z - era * 146097
-  local yoe = math.floor((doe - math.floor(doe / 1460) + math.floor(doe / 36524) - math.floor(doe / 146096)) / 365)
-  local y = yoe + era * 400
-  local doy = doe - (365 * yoe + math.floor(yoe / 4) - math.floor(yoe / 100))
-  local mp = math.floor((5 * doy + 2) / 153)
-  local d = doy - math.floor((153 * mp + 2) / 5) + 1
-  local m = mp < 10 and mp + 3 or mp - 9
-  y = m <= 2 and y + 1 or y
-  return y, m, d
-end
-local subData = redis.call('HMGET', KEYS[2], 'period', 'limit', 'expiresAt')
-local period = subData[1] or 'monthly'
-local limit = tonumber(subData[2])
-local expiresAt = tonumber(subData[3])
+local subData = redis.call('HMGET', KEYS[1], 'limit', 'expiresAt', 'used')
+local limit = tonumber(subData[1])
+local expiresAt = tonumber(subData[2])
+local used = tonumber(subData[3] or '0')
 if not limit or not expiresAt then
   return -2
 end
 if expiresAt <= tonumber(ARGV[1]) then
   return -3
 end
-local days = math.floor(tonumber(ARGV[1]) / 86400000)
-local yy, mm, dd = civilFromDays(days)
-local function pad(n)
-  return n < 10 and '0' .. n or tostring(n)
-end
-local window
-if period == 'daily' then
-  window = tostring(yy) .. '-' .. pad(mm) .. '-' .. pad(dd)
-elseif period == 'yearly' then
-  window = tostring(yy)
-else
-  window = tostring(yy) .. '-' .. pad(mm)
-end
-local counterKey = KEYS[1] .. ':' .. period .. ':' .. window
-local current = tonumber(redis.call('GET', counterKey) or '0')
-if current + 1 > limit then
+if limit ~= 0 and used + 1 > limit then
   return -1
 end
-local newVal = redis.call('INCR', counterKey)
-redis.call('EXPIRE', counterKey, ARGV[2])
+local newVal = redis.call('HINCRBY', KEYS[1], 'used', 1)
+redis.call('PEXPIREAT', KEYS[1], expiresAt + 3600000)
 return newVal
 `;
 
@@ -152,10 +137,8 @@ export type ReserveResult =
   | { status: 'cache_miss' };
 
 /**
- * Atomic quota check-and-increment (§4). Returns:
- *  -1 quota exceeded / -2 cache miss / -3 subscription expired / positive = new count.
- * Redis unreachable (or unconfigured) throws a 503 — the scan path must not
- * create a scan in that case.
+ * Atomic quota check-and-increment. Redis unreachable (or unconfigured) throws
+ * a 503 — the scan path must not create a scan in that case.
  */
 export const reserveScanUsage = async (
   organizationId: string,
@@ -170,11 +153,9 @@ export const reserveScanUsage = async (
   try {
     const result = await redis.eval(
       RESERVE_SCRIPT,
-      2,
-      `org:${organizationId}:scans`,
+      1,
       activeSubscriptionCacheKey(organizationId),
       String(Date.now()),
-      String(COUNTER_TTL_SECONDS),
     );
     if (result === -1) return { status: 'quota_exceeded' };
     if (result === -2) return { status: 'cache_miss' };
@@ -191,6 +172,18 @@ export const reserveScanUsage = async (
   }
 };
 
+// Releases a reservation without ever creating a stray hash: only decrements
+// when the hash already exists and `used` is positive.
+const RELEASE_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  local used = tonumber(redis.call('HGET', KEYS[1], 'used') or '0')
+  if used > 0 then
+    redis.call('HINCRBY', KEYS[1], 'used', -1)
+  end
+end
+return 1
+`;
+
 /** Releases a reservation taken by this request when a duplicate is detected late. */
 export const releaseScanUsage = async (
   organizationId: string,
@@ -200,13 +193,11 @@ export const releaseScanUsage = async (
   }
   const redis = getRedis();
   try {
-    const periodLookup = await redis.hget(
+    await redis.eval(
+      RELEASE_SCRIPT,
+      1,
       activeSubscriptionCacheKey(organizationId),
-      'period',
     );
-    const period = periodLookup || 'monthly';
-    const window = periodWindow(period);
-    await redis.decr(`org:${organizationId}:scans:${period}:${window.key}`);
   } catch (err: any) {
     logger.error(
       `[QUOTA] reserve release failed for ${organizationId}: ${err.message}`,
@@ -214,56 +205,9 @@ export const releaseScanUsage = async (
   }
 };
 
-export const getPeriodScanCount = async (
-  organizationId: string,
-  period: string = 'monthly',
-): Promise<number> => {
-  if (!isRedisConfigured()) {
-    return 0;
-  }
-  const redis = getRedis();
-  const raw = await redis.get(redisScanKey(organizationId, period));
-  return parseInt(String(raw || '0'), 10) || 0;
-};
-
 /**
- * Clears every period counter for an org. Used by force-activation so a brand
- * new active subscription starts from zero regardless of the previous one.
- */
-export const resetScanCounters = async (
-  organizationId: string,
-): Promise<void> => {
-  if (!isRedisConfigured()) {
-    return;
-  }
-  const redis = getRedis();
-  try {
-    const pattern = `org:${organizationId}:scans:*`;
-    let cursor = '0';
-    do {
-      const [next, keys] = await redis.scan(
-        cursor,
-        'MATCH',
-        pattern,
-        'COUNT',
-        200,
-      );
-      cursor = next;
-      if (keys.length) {
-        await redis.del(...keys);
-      }
-    } while (cursor !== '0');
-  } catch (err: any) {
-    logger.error(
-      `[QUOTA] counter reset failed for ${organizationId}: ${err.message}`,
-    );
-  }
-};
-
-/**
- * Reconciliation: copies the current-period Redis counter into the active
- * subscription's Usage.used row (durable mirror, same relationship as the old
- * Organization.scanUsage). Runs in the worker every 30s.
+ * Copies the active-subscription cache counter into the active subscription's
+ * Usage row (durable mirror). Runs in the worker every 30s.
  */
 export const reconcileScanUsage = async (): Promise<
   { organizationId: string; used: number }[]
@@ -274,18 +218,65 @@ export const reconcileScanUsage = async (): Promise<
     return results;
   }
   const activeSubs = await Subscription.find({ status: 'active' }).select(
-    'organizationId billingCycle scanLimit',
+    'organization_id features',
   );
+  const scanLimitOfForSub = (features: any[]) =>
+    features.find((f: any) => f.features_name === 'scan')?.scan_limit ?? 0;
   for (const sub of activeSubs) {
-    const period = sub.billingCycle ?? 'monthly';
-    const count = await getPeriodScanCount(String(sub.organizationId), period);
-    await Usage.updateOne(
-      { subscriptionId: sub._id, organizationId: sub.organizationId },
-      { $set: { used: count, isExhausted: count >= sub.scanLimit } },
+    const raw = await readActiveSubUsage(
+      String(sub.organization_id),
+      sub as any,
     );
-    results.push({ organizationId: String(sub.organizationId), used: count });
+    const used = raw?.used ?? 0;
+    const limit = scanLimitOfForSub(sub.features);
+    await Usage.updateOne(
+      { subscription_id: sub._id, organization_id: sub.organization_id },
+      {
+        $set: {
+          usage: used,
+          is_exhausted: limit !== 0 && used >= limit,
+        },
+      },
+    );
+    results.push({ organizationId: String(sub.organization_id), used });
   }
   return results;
+};
+
+/**
+ * Flushes the org's Redis `used` counter into the active subscription's Usage
+ * row, then returns the flushed value. Call before cancel/expiry/force so the
+ * durable counter is never lost. Returns null when no active cache exists.
+ */
+export const flushActiveSubUsage = async (
+  organizationId: string,
+): Promise<number | null> => {
+  if (!isRedisConfigured()) {
+    return null;
+  }
+  const sub = await Subscription.findOne({
+    organization_id: organizationId,
+    status: 'active',
+  }).select('organization_id _id features');
+  if (!sub) {
+    return null;
+  }
+  const raw = await readActiveSubUsage(organizationId, sub as any);
+  if (!raw) {
+    return null;
+  }
+  const limit =
+    sub.features?.find((f: any) => f.features_name === 'scan')?.scan_limit ?? 0;
+  await Usage.updateOne(
+    { subscription_id: sub._id, organization_id: sub.organization_id },
+    {
+      $set: {
+        usage: raw.used,
+        is_exhausted: limit !== 0 && raw.used >= limit,
+      },
+    },
+  );
+  return raw.used;
 };
 
 export const assertOrganizationActive = async (

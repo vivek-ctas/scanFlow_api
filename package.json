@@ -19,7 +19,9 @@
     "prettier": "prettier --write \"src/**/*.ts\"",
     "prettier-check": "prettier --list-different \"src/**/*.ts\"",
     "check-all": "npm run lint && npm run prettier-check",
-    "test": "vitest run"
+    "test": "vitest run",
+    "seed:super-admin": "tsx src/scripts/seed-super-admin.ts",
+    "seed:demo": "tsx src/scripts/seed-demo-data.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

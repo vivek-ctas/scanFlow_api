@@ -15,12 +15,12 @@ export const verifyOtp = {
 
 export const refreshTokens = {
   body: Joi.object().keys({
-    refreshToken: Joi.string().required(),
+    refresh_token: Joi.string().required(),
   }),
 };
 
 export const logout = {
   body: Joi.object().keys({
-    refreshToken: Joi.string().required(),
+    refresh_token: Joi.string().required(),
   }),
 };

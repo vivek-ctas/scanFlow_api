@@ -11,8 +11,8 @@ interface PaginateResult<T> {
   results: T[];
   page: number;
   limit: number;
-  totalPages: number;
-  totalResults: number;
+  total_pages: number;
+  total_results: number;
 }
 
 export const paginate = (schema: Schema) => {
@@ -30,7 +30,7 @@ export const paginate = (schema: Schema) => {
       });
       sort = sortingCriteria.join(' ');
     } else {
-      sort = 'createdAt';
+      sort = 'created_at';
     }
 
     const limit =
@@ -55,14 +55,14 @@ export const paginate = (schema: Schema) => {
     docsPromise = docsPromise.exec();
 
     return Promise.all([countPromise, docsPromise]).then((values) => {
-      const [totalResults, results] = values;
-      const totalPages = Math.ceil(totalResults / limit);
+      const [total_results, results] = values;
+      const total_pages = Math.ceil(total_results / limit);
       return {
         results,
         page,
         limit,
-        totalPages,
-        totalResults,
+        total_pages,
+        total_results,
       };
     });
   };

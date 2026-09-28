@@ -4,17 +4,18 @@ import { paginate } from './plugins/paginate.plugin.js';
 import { USAGE_RETENTION_DAYS } from '../utils/subscription-expiry.util.js';
 
 export interface IUsage extends Document {
-  organizationId: mongoose.Types.ObjectId;
-  subscriptionId: mongoose.Types.ObjectId;
-  used: number;
-  limit: number;
-  startTime: Date;
-  endTime: Date;
-  lastUsedAt?: Date;
-  isExhausted: boolean;
-  purgeAfter: Date;
-  createdAt: Date;
-  updatedAt: Date;
+  feature_name: string;
+  organization_id: mongoose.Types.ObjectId;
+  subscription_id: mongoose.Types.ObjectId;
+  scan_limit: number;
+  usage: number;
+  started_at: Date;
+  expires_at: Date;
+  last_used_at?: Date;
+  is_exhausted: boolean;
+  purge_after: Date;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface IUsageModel extends Model<IUsage> {
@@ -26,34 +27,35 @@ interface IUsageModel extends Model<IUsage> {
 
 const usageSchema = new Schema<IUsage, IUsageModel>(
   {
-    organizationId: {
+    feature_name: { type: String, default: 'scan', trim: true },
+    organization_id: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
       required: true,
       index: true,
     },
-    subscriptionId: {
+    subscription_id: {
       type: Schema.Types.ObjectId,
       ref: 'tbl_subscription',
       required: true,
     },
-    used: { type: Number, default: 0, min: 0 },
-    limit: { type: Number, required: true, min: 0 },
-    startTime: { type: Date, required: true },
-    endTime: { type: Date, required: true },
-    lastUsedAt: { type: Date },
-    isExhausted: { type: Boolean, default: false },
-    purgeAfter: {
+    scan_limit: { type: Number, required: true, min: 0 },
+    usage: { type: Number, default: 0, min: 0 },
+    started_at: { type: Date, required: true },
+    expires_at: { type: Date, required: true },
+    last_used_at: { type: Date },
+    is_exhausted: { type: Boolean, default: false },
+    purge_after: {
       type: Date,
       default: () => new Date(Date.now() + USAGE_RETENTION_DAYS * 86400000),
     },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
-usageSchema.index({ organizationId: 1, subscriptionId: 1 });
-usageSchema.index({ subscriptionId: 1 });
-usageSchema.index({ purgeAfter: 1 }, { expireAfterSeconds: 0 });
+usageSchema.index({ organization_id: 1, subscription_id: 1 });
+usageSchema.index({ subscription_id: 1 });
+usageSchema.index({ purge_after: 1 }, { expireAfterSeconds: 0 });
 
 usageSchema.plugin(toJSON);
 usageSchema.plugin(paginate);

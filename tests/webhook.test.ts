@@ -1,11 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
-import { createOrg, createPlan, grant, createUser } from './helpers.js';
-import { createScan } from '../src/services/user/scans.service.js';
+import { createOrg, createPlan, grant } from './helpers.js';
 import { flushOrgBatches } from '../src/queues/webhook.worker.js';
-import { WebhookConfig, WebhookDelivery } from '../src/models/index.js';
+import { WebhookConfig, WebhookDelivery, Scan } from '../src/models/index.js';
 
-describe('webhook delivery (§11)', () => {
+describe('webhook delivery (§9)', () => {
   let server: http.Server;
   let baseUrl = '';
   let hits: Array<{ body: any }> = [];
@@ -34,79 +33,121 @@ describe('webhook delivery (§11)', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  const seedWithConfig = async (overrides: Record<string, any> = {}) => {
+    const org = await createOrg();
+    const plan = await createPlan();
+    await grant(String(org._id), String(plan._id), { trialDays: 0 });
+    const config = await WebhookConfig.create({
+      organization_id: org._id,
+      endpoint_url: `${baseUrl}/hook`,
+      enabled: true,
+      batch_size: 1,
+      retry_limit: 3,
+      timeout_ms: 2000,
+      secret: 'secret-a',
+      ...overrides,
+    });
+    return { org, config };
+  };
+
   const scanWith = async (organizationId: string, id: string) => {
+    const { createScan } =
+      await import('../src/services/user/scans.service.js');
+    const { createUser } = await import('./helpers.js');
     const user = await createUser('OPERATOR', organizationId);
     return createScan(
-      { organizationId, clientScanId: id, barcode: `BC-${id}`, deviceId: 'd1' },
+      {
+        organization_id: organizationId,
+        client_scan_id: id,
+        barcode: `BC-${id}`,
+        device_id: 'd1',
+      },
       user,
     );
   };
 
-  it('29. scan persists even with no webhook endpoint configured', async () => {
+  it('scan persists and is delivered to webhooks (snake contract)', async () => {
+    hits = [];
+    respondWith = 200;
+    const { org } = await seedWithConfig();
+    const res = await scanWith(String(org._id), 'webhook-scan-1');
+    expect(res.status).toBe(202);
+
+    await flushOrgBatches(String(org._id));
+
+    const scan = await Scan.findOne({ client_scan_id: 'webhook-scan-1' });
+    expect(scan).toBeTruthy();
+
+    const delivery = await WebhookDelivery.findOne({
+      organization_id: org._id,
+    });
+    expect(delivery).toBeTruthy();
+    expect(String(delivery?.scan_id)).toBe(String(scan?._id));
+    expect(delivery?.status).toBe('delivered');
+    expect(delivery?.retry_count).toBe(1);
+    expect(delivery?.delivered_at).toBeTruthy();
+    expect(hits).toHaveLength(1);
+    const event = hits[0].body.events[0];
+    expect(event.event_id).toBe(delivery?.event_id);
+    expect(event.scan_id).toBe(String(scan?._id));
+    expect(event.organization_id).toBe(String(org._id));
+    expect(event.barcode).toBe('BC-webhook-scan-1');
+  });
+
+  it('delivery failure retries, honoring retry_limit', async () => {
+    hits = [];
+    const { org } = await seedWithConfig({
+      endpoint_url: 'http://127.0.0.1:1/unreachable',
+      retry_limit: 1,
+      timeout_ms: 500,
+    });
+    await scanWith(String(org._id), 'fail-scan');
+    await flushOrgBatches(String(org._id));
+
+    const delivery = await WebhookDelivery.findOne({
+      organization_id: org._id,
+    });
+    expect(delivery?.status).toBe('failed');
+    expect(delivery?.retry_count).toBe(1);
+    expect(delivery?.last_error).toBeTruthy();
+  });
+
+  it('failed delivery retries after backoff and delivers', async () => {
+    hits = [];
+    respondWith = 500;
+    const { org } = await seedWithConfig({ retry_limit: 2 });
+    await scanWith(String(org._id), 'retry-scan');
+    await flushOrgBatches(String(org._id));
+
+    let delivery = await WebhookDelivery.findOne({ organization_id: org._id });
+    expect(delivery?.status).toBe('pending');
+    expect(delivery?.retry_count).toBe(1);
+    expect(delivery?.last_error).toContain('500');
+
+    // simulate the 8s backoff elapsing, then the retry succeeds
+    respondWith = 200;
+    await WebhookDelivery.updateOne(
+      { organization_id: org._id },
+      { $set: { last_attempt_at: new Date(Date.now() - 10_000) } },
+    );
+    await flushOrgBatches(String(org._id));
+    delivery = await WebhookDelivery.findOne({ organization_id: org._id });
+    expect(delivery?.status).toBe('delivered');
+    expect(delivery?.retry_count).toBe(2);
+    expect(delivery?.delivered_at).toBeTruthy();
+    expect(hits).toHaveLength(2);
+  });
+
+  it('scan persists even with no enabled webhook config', async () => {
     const org = await createOrg();
     const plan = await createPlan();
     await grant(String(org._id), String(plan._id), { trialDays: 0 });
     const res = await scanWith(String(org._id), 'no-config');
     expect(res.status).toBe(202);
-    const deliveries = await WebhookDelivery.find({ organizationId: org._id });
+    const scan = await Scan.findOne({ client_scan_id: 'no-config' });
+    expect(scan).toBeTruthy();
+    const deliveries = await WebhookDelivery.find({ organization_id: org._id });
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0].status).toBe('pending');
-  });
-
-  it('30. delivery is retried and eventually delivered (batched)', async () => {
-    hits = [];
-    respondWith = 500;
-    const org = await createOrg();
-    const plan = await createPlan();
-    await grant(String(org._id), String(plan._id), { trialDays: 0 });
-    const res = await scanWith(String(org._id), 'retry-me');
-    expect(res.status).toBe(202);
-
-    await WebhookConfig.create({
-      organizationId: org._id,
-      endpointUrl: `${baseUrl}/hook`,
-      enabled: true,
-      batchSize: 1,
-      retryLimit: 3,
-      timeoutMs: 1000,
-    });
-
-    await flushOrgBatches(String(org._id));
-    const afterFail = await WebhookDelivery.findOne({ organizationId: org._id });
-    expect(afterFail?.status).toBe('pending');
-    expect(afterFail?.attempts).toBe(1);
-    expect(afterFail?.lastError).toContain('500');
-
-    respondWith = 200;
-    await flushOrgBatches(String(org._id));
-    const delivered = await WebhookDelivery.findOne({ organizationId: org._id });
-    expect(delivered?.status).toBe('delivered');
-    expect(hits.length).toBeGreaterThanOrEqual(1);
-    const last = hits[hits.length - 1];
-    expect(last.body.events).toBeDefined();
-    expect(last.body.events).toHaveLength(1);
-    expect(last.body.events[0].scanId).toBeDefined();
-  });
-
-  it('31. webhook failure never blocks the scan response', async () => {
-    hits = [];
-    respondWith = 503;
-    const org = await createOrg();
-    const plan = await createPlan();
-    await grant(String(org._id), String(plan._id), { trialDays: 0 });
-    await WebhookConfig.create({
-      organizationId: org._id,
-      endpointUrl: `${baseUrl}/down`,
-      enabled: true,
-      batchSize: 1,
-      retryLimit: 1,
-      timeoutMs: 500,
-    });
-    const res = await scanWith(String(org._id), 'fail-fast');
-    expect(res.status).toBe(202);
-    await flushOrgBatches(String(org._id));
-    const row = await WebhookDelivery.findOne({ organizationId: org._id });
-    expect(row?.status).toBe('failed');
-    expect(row?.lastError).toBeDefined();
   });
 });

@@ -43,38 +43,56 @@ const MODELS = [
 ];
 
 export const clearDb = async (): Promise<void> => {
+  await Promise.all(MODELS.map((model) => (model as any).deleteMany({})));
+};
+
+/** Drops every collection so mongoose re-creates indexes from the current schema. */
+export const dropCollections = async (): Promise<void> => {
   await Promise.all(
-    MODELS.map((model) => (model as any).deleteMany({})),
+    MODELS.map(async (model) => {
+      try {
+        await (model as any).collection.drop();
+      } catch {
+        // collection may not exist yet
+      }
+    }),
   );
 };
 
 export const createOrg = async (overrides: Record<string, any> = {}) =>
   Organization.create({ name: 'Test Org', status: 1, ...overrides });
 
-export const createPlan = async (overrides: Record<string, any> = {}) =>
-  Plan.create({
+export const createPlan = async (overrides: Record<string, any> = {}) => {
+  const { scan_limit, ...rest } = overrides;
+  const scanLimit = scan_limit ?? 100;
+  return Plan.create({
     name: 'Test Plan',
-    billingCycle: 'monthly',
-    amount: 100,
+    price: 100,
+    price_quarterly: null,
     currency: 'INR',
-    trialDays: 0,
-    scanLimit: 100,
-    isActive: true,
-    isPublic: true,
-    ...overrides,
+    trial_days: 0,
+    features: [{ features_name: 'scan', scan_limit: scanLimit }],
+    marketing_features: [],
+    status: 1,
+    is_custom_plan: false,
+    is_popular: false,
+    discount: 0,
+    ...rest,
   });
+};
 
 export interface TestUserDoc {
+  id: string;
   _id: string;
   role: string;
-  isSuperAdmin?: boolean;
-  organizationId?: string;
+  is_super_admin?: boolean;
+  organization_id?: string;
   email: string;
 }
 
 export const createUser = async (
   role: string,
-  organizationId: string | null,
+  organization_id: string | null,
   overrides: Record<string, any> = {},
 ): Promise<TestUserDoc> => {
   const user = await User.create({
@@ -82,16 +100,19 @@ export const createUser = async (
     last_name: 'User',
     email: `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`,
     role,
-    isSuperAdmin: false,
-    organizationId,
+    is_super_admin: false,
+    organization_id,
     status: 1,
     ...overrides,
   });
   return {
+    id: String(user._id),
     _id: String(user._id),
     role: user.role,
-    isSuperAdmin: user.isSuperAdmin,
-    organizationId: user.organizationId ? String(user.organizationId) : undefined,
+    is_super_admin: user.is_super_admin,
+    organization_id: user.organization_id
+      ? String(user.organization_id)
+      : undefined,
     email: user.email,
   };
 };
@@ -102,8 +123,8 @@ export const createAdminUser = async (overrides: Record<string, any> = {}) => {
     last_name: 'Admin',
     email: `super-${Date.now()}@example.com`,
     role: 'SUPER_ADMIN',
-    isSuperAdmin: true,
-    organizationId: null,
+    is_super_admin: true,
+    organization_id: null,
     status: 1,
     ...overrides,
   });
@@ -115,9 +136,8 @@ export const grant = async (
   planId: string,
   options: Record<string, any> = {},
 ) => {
-  const { grantSubscription } = await import(
-    '../src/services/subscription.service.js'
-  );
+  const { grantSubscription } =
+    await import('../src/services/subscription.service.js');
   return grantSubscription(organizationId, planId, options);
 };
 
@@ -126,9 +146,22 @@ export const scan = async (organizationId: string, clientScanId?: string) => {
   const user = await createUser('OPERATOR', organizationId);
   return createScan(
     {
-      organizationId,
-      clientScanId: clientScanId ?? `scan-${Date.now()}-${Math.random()}`,
+      organization_id: organizationId,
+      client_scan_id: clientScanId ?? `scan-${Date.now()}-${Math.random()}`,
+      barcode: `BC-${clientScanId ?? 'x'}`,
     },
     user,
   );
+};
+
+/** Live `used` counter from the active-subscription Redis hash. */
+export const activeUsed = async (organizationId: string): Promise<number> => {
+  const { getRedis } = await import('../src/queues/redis.js');
+  const { activeSubscriptionCacheKey } =
+    await import('../src/services/quota.service.js');
+  const raw = await getRedis().hget(
+    activeSubscriptionCacheKey(organizationId),
+    'used',
+  );
+  return parseInt(String(raw ?? '0'), 10) || 0;
 };

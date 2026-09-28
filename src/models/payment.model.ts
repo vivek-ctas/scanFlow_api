@@ -5,23 +5,25 @@ import { paginate } from './plugins/paginate.plugin.js';
 export type PaymentStatus =
   'CREATED' | 'TXN_SUCCESS' | 'TXN_FAILURE' | 'FAILED' | 'CANCELLED';
 
-export type PaymentGateway = 'stripe' | 'razorpay';
+export type PaymentGateway = 'stripe' | 'razorpay' | 'manual';
 
 export interface IPayment extends Document {
-  leadId: mongoose.Types.ObjectId;
-  organizationId?: mongoose.Types.ObjectId | null;
+  lead_id?: mongoose.Types.ObjectId | null;
+  organization_id?: mongoose.Types.ObjectId | null;
+  plan_id: mongoose.Types.ObjectId;
   gateway: PaymentGateway;
-  amount: number;
-  gatewayAmount: number;
-  currency: string;
+  price: number;
+  currency_code: string;
+  billing_cycle: 'month' | 'quarterly';
+  order_id?: string | null;
+  transaction_id?: string | null;
   status: PaymentStatus;
-  gatewayEventId?: string;
-  successResponse?: Record<string, any>;
-  failedResponse?: Record<string, any>;
-  invoiceNumber?: string;
-  invoiceUrl?: string;
-  createdAt: Date;
-  updatedAt: Date;
+  gateway_response?: Record<string, any>;
+  paid_at?: Date | null;
+  invoice_number?: string;
+  invoice_url?: string;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface IPaymentModel extends Model<IPayment> {
@@ -33,37 +35,54 @@ interface IPaymentModel extends Model<IPayment> {
 
 const paymentSchema = new Schema<IPayment, IPaymentModel>(
   {
-    leadId: {
+    lead_id: {
       type: Schema.Types.ObjectId,
       ref: 'tbl_guestLead',
-      required: true,
+      default: null,
     },
-    organizationId: {
+    organization_id: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
       default: null,
     },
-    gateway: { type: String, enum: ['stripe', 'razorpay'], required: true },
-    amount: { type: Number, required: true, min: 0 },
-    gatewayAmount: { type: Number, required: true, min: 0 },
-    currency: { type: String, required: true, trim: true, uppercase: true },
+    plan_id: { type: Schema.Types.ObjectId, ref: 'tbl_plan', required: true },
+    gateway: {
+      type: String,
+      enum: ['stripe', 'razorpay', 'manual'],
+      required: true,
+    },
+    price: { type: Number, required: true, min: 0 },
+    currency_code: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true,
+    },
+    billing_cycle: {
+      type: String,
+      enum: ['month', 'quarterly'],
+      required: true,
+    },
+    order_id: { type: String, trim: true },
+    transaction_id: { type: String, trim: true },
     status: {
       type: String,
       enum: ['CREATED', 'TXN_SUCCESS', 'TXN_FAILURE', 'FAILED', 'CANCELLED'],
       default: 'CREATED',
     },
-    gatewayEventId: { type: String, trim: true },
-    successResponse: { type: Schema.Types.Mixed },
-    failedResponse: { type: Schema.Types.Mixed },
-    invoiceNumber: { type: String, trim: true },
-    invoiceUrl: { type: String, trim: true },
+    gateway_response: { type: Schema.Types.Mixed },
+    paid_at: { type: Date },
+    invoice_number: { type: String, trim: true },
+    invoice_url: { type: String, trim: true },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
-paymentSchema.index({ leadId: 1 });
-paymentSchema.index({ gatewayEventId: 1 }, { unique: true, sparse: true });
-paymentSchema.index({ status: 1, createdAt: 1 });
+paymentSchema.index({ lead_id: 1 });
+paymentSchema.index({ order_id: 1 });
+paymentSchema.index({ transaction_id: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ status: 1, created_at: 1 });
+paymentSchema.index({ plan_id: 1 });
 
 paymentSchema.plugin(toJSON);
 paymentSchema.plugin(paginate);

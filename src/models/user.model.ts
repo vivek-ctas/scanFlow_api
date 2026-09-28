@@ -9,18 +9,21 @@ export interface IUser extends Document {
   first_name: string;
   last_name: string;
   email: string;
-  contact_no?: string;
+  contact_number?: string;
+  country_name?: string;
+  company_name?: string;
   password?: string;
   business_address?: string;
   role: string;
-  isSuperAdmin: boolean;
-  organizationId?: mongoose.Types.ObjectId | null;
-  isEmailVerified: boolean;
+  is_super_admin: boolean;
+  organization_id?: mongoose.Types.ObjectId | null;
+  is_email_verified: boolean;
   status: number;
+  avatar?: string;
   created_by?: mongoose.Types.ObjectId | null;
   modified_by?: mongoose.Types.ObjectId | null;
-  createdAt: Date;
-  updatedAt: Date;
+  created_at: Date;
+  updated_at: Date;
   isPasswordMatch(password: string): Promise<boolean>;
 }
 
@@ -50,7 +53,9 @@ const userSchema = new Schema<IUser, IUserModel>(
         message: 'Invalid email',
       },
     },
-    contact_no: { type: String, trim: true },
+    contact_number: { type: String, trim: true },
+    country_name: { type: String, trim: true },
+    company_name: { type: String, trim: true },
     business_address: { type: String, trim: true },
     password: {
       type: String,
@@ -65,18 +70,19 @@ const userSchema = new Schema<IUser, IUserModel>(
       },
     },
     role: { type: String, enum: roles, default: 'OPERATOR' },
-    isSuperAdmin: { type: Boolean, default: false },
-    organizationId: {
+    is_super_admin: { type: Boolean, default: false },
+    organization_id: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
       default: null,
     },
-    isEmailVerified: { type: Boolean, default: false },
+    is_email_verified: { type: Boolean, default: false },
     status: { type: Number, default: 1 },
+    avatar: { type: String, trim: true },
     created_by: { type: Schema.Types.ObjectId, default: null },
     modified_by: { type: Schema.Types.ObjectId, default: null },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
 userSchema.plugin(toJSON);

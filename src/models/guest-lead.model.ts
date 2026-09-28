@@ -6,17 +6,19 @@ export type GuestLeadStatus =
   'pending' | 'initiated' | 'success' | 'failed' | 'cancelled';
 
 export interface IGuestLead extends Document {
-  firstName: string;
-  lastName: string;
+  first_name: string;
+  last_name: string;
   email: string;
-  phone?: string;
-  company?: string;
-  planId: mongoose.Types.ObjectId;
-  trialDays: number;
+  contact_number?: string;
+  company_name?: string;
+  country_name?: string;
+  currency_code: string;
+  plan_id: mongoose.Types.ObjectId;
+  organization_id?: mongoose.Types.ObjectId | null;
+  trial_days: number;
   status: GuestLeadStatus;
-  purchaseLink?: string;
-  createdAt: Date;
-  updatedAt: Date;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface IGuestLeadModel extends Model<IGuestLead> {
@@ -28,8 +30,8 @@ interface IGuestLeadModel extends Model<IGuestLead> {
 
 const guestLeadSchema = new Schema<IGuestLead, IGuestLeadModel>(
   {
-    firstName: { type: String, required: true, trim: true },
-    lastName: { type: String, required: true, trim: true },
+    first_name: { type: String, required: true, trim: true },
+    last_name: { type: String, required: true, trim: true },
     email: {
       type: String,
       required: true,
@@ -37,21 +39,32 @@ const guestLeadSchema = new Schema<IGuestLead, IGuestLeadModel>(
       lowercase: true,
       index: true,
     },
-    phone: { type: String, trim: true },
-    company: { type: String, trim: true },
-    planId: { type: Schema.Types.ObjectId, ref: 'tbl_plan', required: true },
-    trialDays: { type: Number, default: 0, min: 0 },
+    contact_number: { type: String, trim: true },
+    company_name: { type: String, trim: true },
+    country_name: { type: String, trim: true },
+    currency_code: {
+      type: String,
+      default: 'inr',
+      trim: true,
+      lowercase: true,
+    },
+    plan_id: { type: Schema.Types.ObjectId, ref: 'tbl_plan', required: true },
+    organization_id: {
+      type: Schema.Types.ObjectId,
+      ref: 'Organization',
+      default: null,
+    },
+    trial_days: { type: Number, default: 0, min: 0 },
     status: {
       type: String,
       enum: ['pending', 'initiated', 'success', 'failed', 'cancelled'],
       default: 'pending',
     },
-    purchaseLink: { type: String },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
-guestLeadSchema.index({ status: 1, createdAt: 1 });
+guestLeadSchema.index({ status: 1, created_at: 1 });
 
 guestLeadSchema.plugin(toJSON);
 guestLeadSchema.plugin(paginate);

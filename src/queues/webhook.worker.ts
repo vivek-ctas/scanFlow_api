@@ -7,9 +7,9 @@ import { isRedisConfigured } from './redis.js';
 import { WebhookConfig, WebhookDelivery, Scan } from '../models/index.js';
 
 export interface ScanWebhookJobData {
-  eventId: string;
-  scanId: string;
-  organizationId: string;
+  event_id: string;
+  scan_id: string;
+  organization_id: string;
 }
 
 const buildSignature = (secret: string, body: string) =>
@@ -65,12 +65,12 @@ const isBatchDue = (
   let waitUntil = 0;
   for (const row of pending) {
     const anchor =
-      row.attempts > 0 && row.lastAttemptAt
-        ? row.lastAttemptAt.getTime()
-        : row.createdAt.getTime();
+      row.retry_count > 0 && row.last_attempt_at
+        ? row.last_attempt_at.getTime()
+        : row.created_at.getTime();
     waitUntil = Math.max(
       waitUntil,
-      anchor + (row.attempts > 0 ? BATCH_BACKOFF_MS : debounceMs),
+      anchor + (row.retry_count > 0 ? BATCH_BACKOFF_MS : debounceMs),
     );
   }
   return now >= waitUntil;
@@ -82,10 +82,10 @@ const claimPendingBatch = async (
   batchSize: number,
 ): Promise<any[]> => {
   const pending = await WebhookDelivery.find({
-    organizationId,
+    organization_id: organizationId,
     status: 'pending',
   })
-    .sort({ createdAt: 1 })
+    .sort({ created_at: 1 })
     .limit(batchSize);
   if (!pending.length) {
     return [];
@@ -99,8 +99,8 @@ const claimPendingBatch = async (
   await WebhookDelivery.updateMany(
     { _id: { $in: ids }, status: 'pending' },
     {
-      $set: { status: 'processing', lastAttemptAt: new Date() },
-      $inc: { attempts: 1 },
+      $set: { status: 'processing', last_attempt_at: new Date() },
+      $inc: { retry_count: 1 },
     },
   );
   return WebhookDelivery.find({ _id: { $in: ids }, status: 'processing' });
@@ -112,8 +112,8 @@ const markDelivered = async (ids: any[]) => {
     {
       $set: {
         status: 'delivered',
-        deliveredAt: new Date(),
-        lastError: undefined,
+        delivered_at: new Date(),
+        last_error: undefined,
       },
     },
   );
@@ -121,11 +121,11 @@ const markDelivered = async (ids: any[]) => {
 
 const markBatchFailed = async (rows: any[], retryLimit: number) => {
   for (const row of rows) {
-    if (row.attempts >= retryLimit) {
+    if (row.retry_count >= retryLimit) {
       row.status = 'failed';
       await row.save();
     } else {
-      row.status = 'pending'; // backoff is enforced via lastAttemptAt on the next pass
+      row.status = 'pending'; // backoff is enforced via last_attempt_at on the next pass
       await row.save();
     }
   }
@@ -133,13 +133,13 @@ const markBatchFailed = async (rows: any[], retryLimit: number) => {
 
 const sendBatchForOrg = async (organizationId: string, claimed: any[]) => {
   const configDoc = await WebhookConfig.findOne({
-    organizationId,
+    organization_id: organizationId,
     enabled: true,
   }).select('+secret');
   if (!configDoc) {
     for (const row of claimed) {
       row.status = 'failed';
-      row.lastError = 'No enabled webhook config for organization';
+      row.last_error = 'No enabled webhook config for organization';
       await row.save();
     }
     logger.warn(
@@ -148,25 +148,25 @@ const sendBatchForOrg = async (organizationId: string, claimed: any[]) => {
     return;
   }
 
-  const scanIds = claimed.map((row) => row.scanId);
+  const scanIds = claimed.map((row) => row.scan_id);
   const scans = await Scan.find({ _id: { $in: scanIds } });
   const byId = new Map(scans.map((s) => [String(s._id), s]));
 
   const events = claimed.map((row) => {
-    const scan = byId.get(String(row.scanId));
+    const scan = byId.get(String(row.scan_id));
     return {
-      eventId: row.eventId,
-      scanId: String(row.scanId),
-      organizationId: String(organizationId),
+      event_id: row.event_id,
+      scan_id: String(row.scan_id),
+      organization_id: String(organizationId),
       barcode: scan?.barcode ?? null,
-      barcodeType: scan?.barcodeType ?? null,
-      deviceId: scan?.deviceId ?? null,
-      scannedAt: scan?.scannedAt ?? null,
+      barcode_type: scan?.barcode_type ?? null,
+      device_id: scan?.device_id ?? null,
+      scanned_at: scan?.scanned_at ?? null,
     };
   });
   const body = JSON.stringify({ events });
-  const timeoutMs = configDoc.timeoutMs || config.webhook.timeoutMs;
-  const retryLimit = configDoc.retryLimit || config.webhook.retryLimit;
+  const timeoutMs = configDoc.timeout_ms || config.webhook.timeoutMs;
+  const retryLimit = configDoc.retry_limit || config.webhook.retryLimit;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -178,7 +178,7 @@ const sendBatchForOrg = async (organizationId: string, claimed: any[]) => {
     if (configDoc.secret) {
       headers['x-scanflow-signature'] = buildSignature(configDoc.secret, body);
     }
-    const res = await fetch(configDoc.endpointUrl, {
+    const res = await fetch(configDoc.endpoint_url, {
       method: 'POST',
       headers,
       body,
@@ -200,7 +200,7 @@ const sendBatchForOrg = async (organizationId: string, claimed: any[]) => {
         ? 'Webhook timed out'
         : (err?.message ?? 'Webhook delivery failed');
     for (const row of claimed) {
-      row.lastError = message;
+      row.last_error = message;
     }
     await markBatchFailed(claimed, retryLimit);
     logger.error(
@@ -224,10 +224,10 @@ export const flushOrgBatches = async (organizationId: string) => {
   }
   try {
     const configDoc = await WebhookConfig.findOne({
-      organizationId,
+      organization_id: organizationId,
       enabled: true,
     }).select('+secret');
-    const batchSize = configDoc?.batchSize || config.webhook.batchSize || 100;
+    const batchSize = configDoc?.batch_size || config.webhook.batchSize || 100;
     const claimed = await claimPendingBatch(organizationId, batchSize);
     if (!claimed.length) {
       return;
@@ -244,7 +244,7 @@ export const flushOrgBatches = async (organizationId: string) => {
 
 /** Periodic sweep: every org with pending deliveries gets a flush attempt. */
 export const sweepWebhookBatches = async () => {
-  const orgIds = await WebhookDelivery.distinct('organizationId', {
+  const orgIds = await WebhookDelivery.distinct('organization_id', {
     status: 'pending',
   });
   for (const orgId of orgIds) {
@@ -253,8 +253,8 @@ export const sweepWebhookBatches = async () => {
 };
 
 const processor = async (job: Job) => {
-  const { organizationId } = job.data as ScanWebhookJobData;
-  await flushOrgBatches(organizationId);
+  const { organization_id } = job.data as ScanWebhookJobData;
+  await flushOrgBatches(organization_id);
 };
 
 export const startWebhookWorker = async () => {

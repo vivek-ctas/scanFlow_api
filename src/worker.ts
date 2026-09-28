@@ -42,7 +42,7 @@ const everyMinute = async () => {
 const everyHour = async () => {
   try {
     const expired = await Usage.deleteMany({
-      purgeAfter: { $lte: new Date() },
+      purge_after: { $lte: new Date() },
     });
     logger.info(
       `[PURGE] removed ${expired.deletedCount} usage rows past retention`,

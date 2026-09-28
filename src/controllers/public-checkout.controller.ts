@@ -10,7 +10,6 @@ import {
 import {
   verifyRazorpayWebhookSignature,
   verifyRazorpayPaymentSignature,
-  fetchRazorpayOrder,
 } from '../services/razorpay.service.js';
 import { logger } from '../config/logger.js';
 import { Request, Response } from 'express';
@@ -52,31 +51,22 @@ export const stripeWebhook = catchAsync(async (req: Request, res: Response) => {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data?.object ?? {};
-    const leadId = session.metadata?.lead_id;
-    if (!leadId) {
-      logger.warn('[STRIPE] checkout.session.completed without lead_id');
+    if (!session.id) {
+      logger.warn('[STRIPE] checkout.session.completed without session.id');
       return res.status(httpStatus.OK).json({ received: true });
     }
     await processGatewaySuccess({
-      leadId,
+      orderId: session.id,
+      transactionId: event.id,
       gateway: 'stripe',
-      gatewayEventId: event.id,
       successPayload: session,
       amount: (session.amount_total ?? 0) / 100,
-      gatewayAmount: session.amount_total ?? 0,
       currency: session.currency ?? 'usd',
     });
   }
 
   res.status(httpStatus.OK).json({ received: true });
 });
-
-const resolveRazorpayLeadId = async (
-  orderId: string,
-): Promise<string | null> => {
-  const order = await fetchRazorpayOrder(orderId);
-  return order?.receipt ? String(order.receipt) : null;
-};
 
 export const razorpayWebhook = catchAsync(
   async (req: Request, res: Response) => {
@@ -104,7 +94,6 @@ export const razorpayWebhook = catchAsync(
     const body: any = req.body;
     const event = body?.event;
     const paymentEntity = body?.payload?.payment?.entity;
-    const orderEntity = body?.payload?.order?.entity;
 
     if (event === 'payment.captured' && paymentEntity) {
       if (
@@ -120,28 +109,16 @@ export const razorpayWebhook = catchAsync(
         );
       }
 
-      const orderId = String(paymentEntity.order_id);
-      let leadId: string | null = null;
-      if (orderEntity?.receipt) {
-        leadId = String(orderEntity.receipt);
-      }
-      if (!leadId) {
-        leadId = await resolveRazorpayLeadId(orderId);
-      }
-      if (!leadId || paymentEntity.status !== 'captured') {
-        logger.warn(
-          `[RAZORPAY] payment.captured with no resolvable lead (order=${orderId})`,
-        );
+      if (paymentEntity.status !== 'captured') {
         return res.status(httpStatus.OK).json({ received: true });
       }
 
       await processGatewaySuccess({
-        leadId,
+        orderId: String(paymentEntity.order_id),
+        transactionId: String(paymentEntity.id),
         gateway: 'razorpay',
-        gatewayEventId: String(paymentEntity.id),
         successPayload: body.payload,
         amount: (paymentEntity.amount ?? 0) / 100,
-        gatewayAmount: paymentEntity.amount ?? 0,
         currency: paymentEntity.currency ?? 'INR',
       });
     }

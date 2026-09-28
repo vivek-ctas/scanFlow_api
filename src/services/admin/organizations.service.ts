@@ -14,9 +14,9 @@ export const createOrganization = async (
   orgBody: Record<string, any>,
   createdBy?: string,
 ) => {
-  const adminEmail = normalizeEmail(orgBody.adminEmail);
+  const adminEmail = normalizeEmail(orgBody.admin_email);
   if (!adminEmail) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'adminEmail is required');
+    throw new ApiError(httpStatus.BAD_REQUEST, 'admin_email is required');
   }
   if (await User.isEmailTaken(adminEmail)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
@@ -25,20 +25,20 @@ export const createOrganization = async (
   const org = await Organization.create({
     name: orgBody.name,
     email: orgBody.email,
-    contactNumber: orgBody.contactNumber,
+    contact_number: orgBody.contact_number,
     status: orgBody.status ?? 1,
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
 
   const admin = await User.create({
-    first_name: orgBody.adminFirstName || 'Organization',
-    last_name: orgBody.adminLastName || 'Admin',
+    first_name: orgBody.admin_first_name || 'Organization',
+    last_name: orgBody.admin_last_name || 'Admin',
     email: adminEmail,
-    contact_no: orgBody.adminContactNo,
+    contact_number: orgBody.admin_contact_no,
     role: 'ORGANIZATION_ADMIN',
-    organizationId: org._id,
-    isSuperAdmin: false,
-    isEmailVerified: false,
+    organization_id: org._id,
+    is_super_admin: false,
+    is_email_verified: false,
     status: 1,
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
@@ -70,8 +70,8 @@ export const listOrganizations = async (
     results: orgs.results,
     page: orgs.page,
     limit: orgs.limit,
-    totalPages: orgs.totalPages,
-    totalResults: orgs.totalResults,
+    total_pages: orgs.total_pages,
+    total_results: orgs.total_results,
   });
 };
 
@@ -83,7 +83,7 @@ export const getOrganizationById = async (organizationId: string) => {
   return org;
 };
 
-const ORG_UPDATE_KEYS = ['name', 'email', 'contactNumber', 'status'];
+const ORG_UPDATE_KEYS = ['name', 'email', 'contact_number', 'status'];
 
 export const updateOrganizationById = async (
   organizationId: string,

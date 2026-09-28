@@ -19,16 +19,16 @@ export const listOperators = catchAsync(async (req: Request, res: Response) => {
     'search',
     'status',
     'role',
-    'organizationId',
+    'organization_id',
   ]);
-  const options = pick(req.query, ['sortBy', 'limit', 'page']);
+  const options = pick(req.query, ['sort_by', 'limit', 'page']);
   const result = await operatorService.listOperators(filter, options, req.user);
   res.status(result.status).json(result);
 });
 
 export const getOperator = catchAsync(async (req: Request, res: Response) => {
-  const query = pick(req.query, ['organizationId']);
-  const organizationId = String(query.organizationId ?? '') || undefined;
+  const query = pick(req.query, ['organization_id']);
+  const organizationId = String(query.organization_id ?? '') || undefined;
   const user = await operatorService.getOperatorById(
     operatorIdParam(req),
     req.user,

@@ -35,8 +35,8 @@ export const assignPlan = catchAsync(async (req: Request, res: Response) => {
   const organizationId = await resolveOrgAndAssert(req);
   const sub = await subscriptionService.grantSubscription(
     organizationId,
-    req.body.planId,
-    { trialDays: 0 },
+    req.body.plan_id,
+    { trialDays: 0, billingCycle: req.body.billing_cycle ?? 'month' },
   );
   res.status(httpStatus.CREATED).json(
     createResponse(httpStatus.CREATED, 'Plan assigned successfully.', {
@@ -56,7 +56,10 @@ export const renewSubscription = catchAsync(
     const result = await subscriptionService.renewSubscription(
       organizationId,
       mode,
-      { planId: req.body.planId },
+      {
+        planId: req.body.plan_id,
+        billingCycle: req.body.billing_cycle,
+      },
     );
     res.status(result.status).json(result);
   },
@@ -78,8 +81,11 @@ export const forceActivateSubscription = catchAsync(
     const organizationId = await resolveOrgAndAssert(req);
     const result = await subscriptionService.forceActivateSubscription(
       organizationId,
-      req.body.planId,
-      { trialDays: req.body.trialDays ?? 0 },
+      req.body.plan_id,
+      {
+        trialDays: req.body.trial_days ?? 0,
+        billingCycle: req.body.billing_cycle ?? 'month',
+      },
     );
     res.status(result.status).json(result);
   },

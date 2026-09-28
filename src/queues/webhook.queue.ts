@@ -5,9 +5,9 @@ import { logger } from '../config/logger.js';
 import { isRedisConfigured } from './redis.js';
 
 export interface ScanWebhookJobPayload {
-  eventId: string;
-  scanId: string;
-  organizationId: string;
+  event_id: string;
+  scan_id: string;
+  organization_id: string;
 }
 
 let queue: Queue | null = null;
@@ -32,7 +32,7 @@ export const enqueueScanWebhook = async (job: ScanWebhookJobPayload) => {
   }
   const q = getWebhookQueue();
   return q.add('scan-created', job, {
-    jobId: job.eventId,
+    jobId: job.event_id,
     attempts: config.webhook.retryLimit,
     backoff: { type: 'exponential', delay: 2000 },
     removeOnComplete: 1000,

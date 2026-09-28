@@ -3,15 +3,15 @@ import { toJSON } from './plugins/toJSON.plugin.js';
 import { paginate } from './plugins/paginate.plugin.js';
 
 export interface IScan extends Document {
-  organizationId: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;
-  deviceId?: string;
-  clientScanId: string;
+  organization_id: mongoose.Types.ObjectId;
+  user_id: mongoose.Types.ObjectId;
+  device_id?: string;
+  client_scan_id: string;
   barcode: string;
-  barcodeType?: string;
-  scannedAt: Date;
-  createdAt: Date;
-  updatedAt: Date;
+  barcode_type?: string;
+  scanned_at: Date;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface IScanModel extends Model<IScan> {
@@ -23,24 +23,24 @@ interface IScanModel extends Model<IScan> {
 
 const scanSchema = new Schema<IScan, IScanModel>(
   {
-    organizationId: {
+    organization_id: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
       required: true,
     },
-    userId: { type: Schema.Types.ObjectId, ref: 'tbl_user', required: true },
-    deviceId: { type: String, trim: true },
-    clientScanId: { type: String, required: true, trim: true },
+    user_id: { type: Schema.Types.ObjectId, ref: 'tbl_user', required: true },
+    device_id: { type: String, trim: true },
+    client_scan_id: { type: String, required: true, trim: true },
     barcode: { type: String, required: true, trim: true },
-    barcodeType: { type: String, trim: true },
-    scannedAt: { type: Date, default: Date.now },
+    barcode_type: { type: String, trim: true },
+    scanned_at: { type: Date, default: Date.now },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
-scanSchema.index({ organizationId: 1, clientScanId: 1 }, { unique: true });
-scanSchema.index({ organizationId: 1, scannedAt: 1 });
-scanSchema.index({ organizationId: 1, userId: 1, scannedAt: 1 });
+scanSchema.index({ organization_id: 1, client_scan_id: 1 }, { unique: true });
+scanSchema.index({ organization_id: 1, scanned_at: 1 });
+scanSchema.index({ organization_id: 1, user_id: 1, scanned_at: 1 });
 
 scanSchema.plugin(toJSON);
 scanSchema.plugin(paginate);

@@ -4,15 +4,19 @@ import { paginate } from './plugins/paginate.plugin.js';
 
 export interface IPlan extends Document {
   name: string;
-  billingCycle: 'monthly' | 'yearly';
-  amount: number;
+  desc?: string;
+  price: number;
+  price_quarterly?: number | null;
   currency: string;
-  trialDays: number;
-  scanLimit: number;
-  isActive: boolean;
-  isPublic: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+  trial_days: number;
+  features: { features_name: string; scan_limit: number }[];
+  marketing_features: string[];
+  status: number;
+  is_custom_plan: boolean;
+  is_popular: boolean;
+  discount: number;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface IPlanModel extends Model<IPlan> {
@@ -25,22 +29,31 @@ interface IPlanModel extends Model<IPlan> {
 const planSchema = new Schema<IPlan, IPlanModel>(
   {
     name: { type: String, required: true, trim: true },
-    billingCycle: {
-      type: String,
-      enum: ['monthly', 'yearly'],
-      default: 'monthly',
+    desc: { type: String, trim: true },
+    price: { type: Number, required: true, min: 0 },
+    price_quarterly: { type: Number, default: null, min: 0 },
+    currency: { type: String, default: 'inr', trim: true, lowercase: true },
+    trial_days: { type: Number, default: 0, min: 0 },
+    features: {
+      type: [
+        {
+          _id: false,
+          features_name: { type: String, required: true, trim: true },
+          scan_limit: { type: Number, default: 0, min: 0 },
+        },
+      ],
+      default: [],
     },
-    amount: { type: Number, default: 0 },
-    currency: { type: String, default: 'INR', trim: true, uppercase: true },
-    trialDays: { type: Number, default: 0, min: 0 },
-    scanLimit: { type: Number, default: 0, min: 0 },
-    isActive: { type: Boolean, default: true },
-    isPublic: { type: Boolean, default: false },
+    marketing_features: { type: [String], default: [] },
+    status: { type: Number, default: 1 },
+    is_custom_plan: { type: Boolean, default: false },
+    is_popular: { type: Boolean, default: false },
+    discount: { type: Number, default: 0, min: 0, max: 100 },
   },
-  { timestamps: true },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
-planSchema.index({ isActive: 1, isPublic: 1 });
+planSchema.index({ status: 1, is_custom_plan: 1 });
 
 planSchema.plugin(toJSON);
 planSchema.plugin(paginate);

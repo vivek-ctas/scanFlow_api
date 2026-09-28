@@ -1,4 +1,5 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import { Organization } from '../models/organization.model.js';
 import { Plan, IPlan } from '../models/plan.model.js';
 import {
@@ -6,27 +7,31 @@ import {
   ISubscription,
   SubscriptionStatus,
 } from '../models/subscription.model.js';
+import { Payment } from '../models/payment.model.js';
 import { Usage } from '../models/usage.model.js';
+import { Scan } from '../models/scan.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { createResponse, toObjectId } from './common.service.js';
 import {
   computeExpiresAt,
   USAGE_RETENTION_DAYS,
 } from '../utils/subscription-expiry.util.js';
+import { scanLimitOf, priceForCycle } from '../utils/plan-features.util.js';
 import {
   writeActiveSubscriptionCache,
   deleteActiveSubscriptionCache,
-  resetScanCounters,
+  flushActiveSubUsage,
+  readActiveSubUsage,
 } from './quota.service.js';
 import { isSuperAdmin } from '../middlewares/guards/isSuperAdmin.js';
 
 const activeSubQuery = (organizationId: string) => ({
-  organizationId: toObjectId(organizationId),
+  organization_id: toObjectId(organizationId),
   status: 'active' as SubscriptionStatus,
 });
 
 const futureQuery = (organizationId: string) => ({
-  organizationId: toObjectId(organizationId),
+  organization_id: toObjectId(organizationId),
   status: 'future' as SubscriptionStatus,
 });
 
@@ -49,7 +54,7 @@ export const resolveOrganizationScope = (
   reqUser: any,
 ): string => {
   if (!isSuperAdmin(reqUser)) {
-    return String(reqUser.organizationId);
+    return String(reqUser.organization_id);
   }
   return organizationId;
 };
@@ -57,19 +62,44 @@ export const resolveOrganizationScope = (
 export const getActiveSubscription = async (
   organizationId: string,
 ): Promise<ISubscription | null> =>
-  Subscription.findOne(activeSubQuery(organizationId)).sort({ createdAt: -1 });
+  Subscription.findOne(activeSubQuery(organizationId)).sort({ created_at: -1 });
 
 export const getOrganizationSubscriptionQueue = async (
   organizationId: string,
 ): Promise<ISubscription[]> =>
-  Subscription.find(futureQuery(organizationId)).sort({ queuePriority: 1 });
+  Subscription.find(futureQuery(organizationId)).sort({ queue_priority: 1 });
 
-const writeActiveSubCache = async (sub: ISubscription): Promise<void> => {
+/** Creates the manual Payment row used by admin grants and renewals. */
+const createManualPaymentRecord = async (data: {
+  organization_id: mongoose.Types.ObjectId;
+  plan_id: mongoose.Types.ObjectId;
+  price: number;
+  currency_code: string;
+  billing_cycle: 'month' | 'quarterly';
+}): Promise<mongoose.Types.ObjectId> => {
+  const payment = await Payment.create({
+    organization_id: data.organization_id,
+    plan_id: data.plan_id,
+    gateway: 'manual',
+    price: data.price,
+    currency_code: data.currency_code,
+    billing_cycle: data.billing_cycle,
+    status: 'TXN_SUCCESS',
+    paid_at: new Date(),
+    lead_id: null,
+  });
+  return payment._id;
+};
+
+const writeActiveSubCache = async (
+  sub: ISubscription,
+  resetUsed: boolean = true,
+): Promise<void> => {
   await writeActiveSubscriptionCache(
-    String(sub.organizationId),
-    sub.scanLimit,
-    sub.expiresAt,
-    sub.billingCycle,
+    String(sub.organization_id),
+    scanLimitOf(sub.features),
+    sub.expires_at,
+    resetUsed,
   );
 };
 
@@ -79,8 +109,9 @@ const deleteActiveSubCache = async (organizationId: string): Promise<void> => {
 
 /**
  * Cold-cache fallback (§4 -2 handling): the only time the scan hot path
- * touches the Subscription collection. Populates the cache from Mongo and
- * reports whether an active subscription exists.
+ * touches the Subscription collection. Populates the cache from Mongo
+ * (seeded with the max of the durable Usage row and the scans created since
+ * the subscription started) and reports whether an active subscription exists.
  */
 export const populateActiveSubCache = async (
   organizationId: string,
@@ -89,7 +120,22 @@ export const populateActiveSubCache = async (
   if (!active) {
     return false;
   }
-  await writeActiveSubCache(active);
+  const usage = await Usage.findOne({
+    organization_id: toObjectId(organizationId),
+    subscription_id: active._id,
+  });
+  const scansFromStart = await Scan.countDocuments({
+    organization_id: toObjectId(organizationId),
+    created_at: { $gte: active.started_at },
+  });
+  const used = Math.max(usage?.usage ?? 0, scansFromStart);
+  await writeActiveSubscriptionCache(
+    String(active.organization_id),
+    scanLimitOf(active.features),
+    active.expires_at,
+    false,
+    used,
+  );
   return true;
 };
 
@@ -97,20 +143,39 @@ export const createUsageForSubscription = async (
   sub: ISubscription,
 ): Promise<InstanceType<typeof Usage>> =>
   Usage.create({
-    organizationId: sub.organizationId,
-    subscriptionId: sub._id,
-    used: 0,
-    limit: sub.scanLimit,
-    startTime: sub.startedAt,
-    endTime: sub.expiresAt,
-    purgeAfter: new Date(
-      sub.expiresAt.getTime() + USAGE_RETENTION_DAYS * 86400000,
+    feature_name: 'scan',
+    organization_id: sub.organization_id,
+    subscription_id: sub._id,
+    scan_limit: scanLimitOf(sub.features),
+    usage: 0,
+    started_at: sub.started_at,
+    expires_at: sub.expires_at,
+    is_exhausted: false,
+    purge_after: new Date(
+      sub.expires_at.getTime() + USAGE_RETENTION_DAYS * 86400000,
     ),
   });
 
+const planPriceFor = (
+  plan: IPlan,
+  billingCycle: 'month' | 'quarterly',
+): number => {
+  try {
+    return priceForCycle(plan.price, plan.price_quarterly, billingCycle);
+  } catch (err: any) {
+    if (err.message === 'PLAN_QUARTERLY_PRICE_REQUIRED') {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Quarterly pricing is not configured for this plan',
+      );
+    }
+    throw err;
+  }
+};
+
 const decideInitialStatus = async (
   organizationId: string,
-  plan: IPlan,
+  billingCycle: 'month' | 'quarterly',
   trialDays: number,
   forceActive: boolean,
 ): Promise<{
@@ -125,16 +190,14 @@ const decideInitialStatus = async (
       status: 'active',
       queuePriority: 0,
       startedAt: now,
-      expiresAt: computeExpiresAt(plan.billingCycle, trialDays, now),
+      expiresAt: computeExpiresAt(billingCycle, trialDays, now),
     };
   }
   const active = await Subscription.findOne(
     activeSubQuery(organizationId),
-  ).sort({
-    createdAt: -1,
-  });
+  ).sort({ created_at: -1 });
   const futures = await Subscription.find(futureQuery(organizationId)).sort({
-    queuePriority: 1,
+    queue_priority: 1,
   });
   if (!active && futures.length === 0) {
     const now = new Date();
@@ -142,18 +205,18 @@ const decideInitialStatus = async (
       status: 'active',
       queuePriority: 0,
       startedAt: now,
-      expiresAt: computeExpiresAt(plan.billingCycle, trialDays, now),
+      expiresAt: computeExpiresAt(billingCycle, trialDays, now),
     };
   }
   const chainSource = active ?? futures[futures.length - 1];
-  const startedAt = chainSource ? chainSource.expiresAt : new Date();
+  const startedAt = chainSource ? chainSource.expires_at : new Date();
   return {
     status: 'future',
     queuePriority: futures.length
-      ? (futures[futures.length - 1]?.queuePriority ?? 0) + 1
+      ? (futures[futures.length - 1]?.queue_priority ?? 0) + 1
       : 1,
     startedAt,
-    expiresAt: computeExpiresAt(plan.billingCycle, trialDays, startedAt),
+    expiresAt: computeExpiresAt(billingCycle, trialDays, startedAt),
   };
 };
 
@@ -164,36 +227,63 @@ const decideInitialStatus = async (
 export const grantSubscription = async (
   organizationId: string,
   planId: string,
-  options: { trialDays?: number; forceActive?: boolean } = {},
+  options: {
+    trialDays?: number;
+    forceActive?: boolean;
+    billingCycle?: 'month' | 'quarterly';
+    paymentId?: string;
+  } = {},
 ): Promise<ISubscription> => {
   const plan = await Plan.findById(planId);
-  if (!plan || !plan.isActive) {
+  if (!plan || plan.status !== 1) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Plan not found or not active');
   }
+  const billingCycle = options.billingCycle ?? 'month';
   const trialDays = options.trialDays ?? 0;
+  const planPrice = planPriceFor(plan, billingCycle);
   const decided = await decideInitialStatus(
     organizationId,
-    plan,
+    billingCycle,
     trialDays,
     Boolean(options.forceActive),
   );
 
+  const orgId = toObjectId(organizationId);
+  const paymentId = options.paymentId
+    ? toObjectId(options.paymentId)
+    : await createManualPaymentRecord({
+        organization_id: orgId,
+        plan_id: plan._id,
+        price: planPrice,
+        currency_code: plan.currency || 'inr',
+        billing_cycle: billingCycle,
+      });
+
   const sub = await Subscription.create({
-    organizationId: toObjectId(organizationId),
-    planId: plan._id,
-    scanLimit: plan.scanLimit,
-    billingCycle: plan.billingCycle,
+    organization_id: orgId,
+    plan_id: plan._id,
+    payment_id: paymentId,
+    features: plan.features.map((f) => ({
+      features_name: f.features_name,
+      scan_limit: f.scan_limit,
+    })),
+    billing_cycle: billingCycle,
     status: decided.status,
-    startedAt: decided.startedAt,
-    expiresAt: decided.expiresAt,
-    usageResetAnchor: decided.startedAt,
-    queuePriority: decided.queuePriority,
-    planValidityDays: trialDays > 0 ? trialDays : undefined,
+    started_at: decided.startedAt,
+    expires_at: decided.expiresAt,
+    queue_priority: decided.queuePriority,
+    reminders_sent: [],
+    marketing_features: plan.marketing_features ?? [],
+    trial_days: trialDays,
+    currency_code: plan.currency || 'inr',
+    plan_price: planPrice,
+    plan_name: plan.name,
+    is_plan_cancel: false,
   });
 
   if (sub.status === 'active') {
     await createUsageForSubscription(sub);
-    await writeActiveSubCache(sub);
+    await writeActiveSubCache(sub, true);
   }
   return sub;
 };
@@ -203,17 +293,17 @@ export const promoteEarliestFutureSubscription = async (
 ): Promise<ISubscription | null> => {
   const earliest = await Subscription.findOne(futureQuery(organizationId)).sort(
     {
-      queuePriority: 1,
+      queue_priority: 1,
     },
   );
   if (!earliest) {
     return null;
   }
   earliest.status = 'active';
-  earliest.queuePriority = 0;
+  earliest.queue_priority = 0;
   await earliest.save();
   await createUsageForSubscription(earliest);
-  await writeActiveSubCache(earliest);
+  await writeActiveSubCache(earliest, true);
   await normalizeQueuePriorities(organizationId);
   return earliest;
 };
@@ -222,12 +312,12 @@ export const normalizeQueuePriorities = async (
   organizationId: string,
 ): Promise<void> => {
   const futures = await Subscription.find(futureQuery(organizationId)).sort({
-    queuePriority: 1,
+    queue_priority: 1,
   });
   const ops = futures.map((sub, index) => ({
     updateOne: {
       filter: { _id: sub._id },
-      update: { $set: { queuePriority: index + 1 } },
+      update: { $set: { queue_priority: index + 1 } },
     },
   }));
   if (ops.length) {
@@ -236,7 +326,7 @@ export const normalizeQueuePriorities = async (
 };
 
 export const normalizeAllQueuePriorities = async (): Promise<void> => {
-  const orgIds = await Subscription.distinct('organizationId', {
+  const orgIds = await Subscription.distinct('organization_id', {
     status: 'future',
   });
   for (const orgId of orgIds) {
@@ -254,20 +344,22 @@ export const activateEligibleSubscriptions = async (): Promise<void> => {
 
   const actives = await Subscription.find({ status: 'active' });
   for (const active of actives) {
-    if (active.expiresAt.getTime() <= now.getTime()) {
+    if (active.expires_at.getTime() <= now.getTime()) {
+      const orgId = String(active.organization_id);
+      await flushActiveSubUsage(orgId);
+      await deleteActiveSubCache(orgId);
       active.status = 'expired';
       await active.save();
-      await deleteActiveSubCache(String(active.organizationId));
-      orgIds.add(String(active.organizationId));
+      orgIds.add(orgId);
     }
   }
 
   const dueFutures = await Subscription.find({
     status: 'future',
-    startedAt: { $lte: now },
-  }).select('organizationId');
+    started_at: { $lte: now },
+  }).select('organization_id');
   for (const future of dueFutures) {
-    orgIds.add(String(future.organizationId));
+    orgIds.add(String(future.organization_id));
   }
 
   for (const orgId of orgIds) {
@@ -281,7 +373,7 @@ export const activateEligibleSubscriptions = async (): Promise<void> => {
 export const renewSubscription = async (
   organizationId: string,
   mode: 'continue' | 'promote' | 'recreate',
-  options: { planId?: string } = {},
+  options: { planId?: string; billingCycle?: 'month' | 'quarterly' } = {},
 ) => {
   const active = await getActiveSubscription(organizationId);
   if (!active) {
@@ -290,36 +382,50 @@ export const renewSubscription = async (
 
   if (mode === 'continue') {
     const newExpiry = computeExpiresAt(
-      active.billingCycle,
-      active.planValidityDays && active.planValidityDays > 0
-        ? active.planValidityDays
-        : 0,
-      active.expiresAt,
+      active.billing_cycle,
+      active.trial_days && active.trial_days > 0 ? active.trial_days : 0,
+      active.expires_at,
     );
-    active.expiresAt = newExpiry;
+    active.expires_at = newExpiry;
     await active.save();
-    await writeActiveSubCache(active);
+    await writeActiveSubCache(active, false);
 
     const futures = await getOrganizationSubscriptionQueue(organizationId);
     if (futures.length) {
       const shiftOps = futures.map((sub, index) => ({
         updateOne: {
           filter: { _id: sub._id },
-          update: { $set: { queuePriority: index + 2 } },
+          update: { $set: { queue_priority: index + 2 } },
         },
       }));
       await Subscription.bulkWrite(shiftOps);
+      const nextPaymentId = await createManualPaymentRecord({
+        organization_id: active.organization_id,
+        plan_id: active.plan_id,
+        price: active.plan_price,
+        currency_code: active.currency_code,
+        billing_cycle: active.billing_cycle,
+      });
       await Subscription.create({
-        organizationId: toObjectId(organizationId),
-        planId: active.planId,
-        scanLimit: active.scanLimit,
-        billingCycle: active.billingCycle,
+        organization_id: toObjectId(organizationId),
+        plan_id: active.plan_id,
+        payment_id: nextPaymentId,
+        features: active.features.map((f) => ({
+          features_name: f.features_name,
+          scan_limit: f.scan_limit,
+        })),
+        billing_cycle: active.billing_cycle,
         status: 'future',
-        startedAt: newExpiry,
-        expiresAt: computeExpiresAt(active.billingCycle, 0, newExpiry),
-        usageResetAnchor: newExpiry,
-        queuePriority: 1,
-        planValidityDays: active.planValidityDays,
+        started_at: newExpiry,
+        expires_at: computeExpiresAt(active.billing_cycle, 0, newExpiry),
+        queue_priority: 1,
+        reminders_sent: [],
+        marketing_features: active.marketing_features ?? [],
+        trial_days: 0,
+        currency_code: active.currency_code,
+        plan_price: active.plan_price,
+        plan_name: active.plan_name,
+        is_plan_cancel: false,
       });
     }
     await normalizeQueuePriorities(organizationId);
@@ -347,14 +453,16 @@ export const renewSubscription = async (
   }
 
   active.status = 'cancelled';
-  active.cancellationReason = 'recreate';
+  active.cancellation_reason = 'recreate';
   await active.save();
+  await flushActiveSubUsage(organizationId);
   await deleteActiveSubCache(organizationId);
   const created = await grantSubscription(
     organizationId,
-    options.planId ?? String(active.planId),
+    options.planId ?? String(active.plan_id),
     {
       trialDays: 0,
+      billingCycle: options.billingCycle ?? active.billing_cycle,
     },
   );
   await normalizeQueuePriorities(organizationId);
@@ -372,8 +480,9 @@ export const cancelActiveSubscription = async (
   if (!active) {
     throw new ApiError(httpStatus.NOT_FOUND, 'NO_ACTIVE_SUBSCRIPTION');
   }
+  await flushActiveSubUsage(organizationId);
   active.status = 'cancelled';
-  active.cancellationReason = reason || 'Cancelled';
+  active.cancellation_reason = reason || 'Cancelled';
   await active.save();
   await deleteActiveSubCache(organizationId);
   const promoted = await promoteEarliestFutureSubscription(organizationId);
@@ -387,21 +496,22 @@ export const cancelActiveSubscription = async (
 export const forceActivateSubscription = async (
   organizationId: string,
   planId: string,
-  options: { trialDays?: number } = {},
+  options: { trialDays?: number; billingCycle?: 'month' | 'quarterly' } = {},
 ) => {
   const existingActive = await getActiveSubscription(organizationId);
   if (existingActive) {
+    await flushActiveSubUsage(organizationId);
+    await Usage.deleteMany({ subscription_id: existingActive._id });
     existingActive.status = 'cancelled';
-    existingActive.cancellationReason = 'Force activated';
+    existingActive.cancellation_reason = 'Force activated';
     await existingActive.save();
-    await Usage.deleteMany({ subscriptionId: existingActive._id });
     await deleteActiveSubCache(organizationId);
   }
   const created = await grantSubscription(organizationId, planId, {
     trialDays: options.trialDays ?? 0,
     forceActive: true,
+    billingCycle: options.billingCycle ?? 'month',
   });
-  await resetScanCounters(organizationId);
   await normalizeQueuePriorities(organizationId);
   return createResponse(httpStatus.OK, 'Subscription force-activated.', {
     subscription: created,
@@ -412,15 +522,15 @@ export const getSubscriptionSummary = async (
   organizationId: string,
 ): Promise<ReturnType<typeof createResponse>> => {
   const active = await Subscription.findOne(activeSubQuery(organizationId))
-    .populate('planId')
-    .sort({ createdAt: -1 });
+    .populate('plan_id')
+    .sort({ created_at: -1 });
   const futureQueue = await Subscription.find(futureQuery(organizationId))
-    .populate('planId')
-    .sort({ queuePriority: 1 });
+    .populate('plan_id')
+    .sort({ queue_priority: 1 });
   const usage = active
     ? await Usage.findOne({
-        organizationId: toObjectId(organizationId),
-        subscriptionId: active._id,
+        organization_id: toObjectId(organizationId),
+        subscription_id: active._id,
       })
     : null;
   return createResponse(httpStatus.OK, 'Subscription fetched successfully.', {
@@ -437,33 +547,39 @@ export const getOrganizationUsage = async (organizationId: string) => {
       httpStatus.OK,
       'Organization usage fetched successfully.',
       {
-        organizationId,
-        usage: { periodCount: 0, quotaLimit: 0, quotaPeriod: null },
+        organization_id: organizationId,
+        usage: {
+          period_count: 0,
+          scan_limit: 0,
+          quota_period: null,
+          subscription_expires_at: null,
+        },
       },
     );
   }
   const usage = await Usage.findOne({
-    organizationId: toObjectId(organizationId),
-    subscriptionId: active._id,
+    organization_id: toObjectId(organizationId),
+    subscription_id: active._id,
   });
+  const cache = await readActiveSubUsage(organizationId, active as any);
   return createResponse(
     httpStatus.OK,
     'Organization usage fetched successfully.',
     {
-      organizationId,
+      organization_id: organizationId,
       usage: {
-        periodCount: usage?.used ?? 0,
-        quotaLimit: active.scanLimit,
-        quotaPeriod: active.billingCycle,
-        subscriptionExpiresAt: active.expiresAt,
+        period_count: cache?.used ?? usage?.usage ?? 0,
+        scan_limit: scanLimitOf(active.features),
+        quota_period: active.billing_cycle,
+        subscription_expires_at: active.expires_at,
       },
     },
   );
 };
 
 export const listPlans = async () => {
-  const plans = await Plan.find({ isActive: true, isPublic: true }).sort({
-    amount: 1,
+  const plans = await Plan.find({ status: 1, is_custom_plan: false }).sort({
+    price: 1,
   });
   return createResponse(httpStatus.OK, 'Plans fetched successfully.', {
     plans,

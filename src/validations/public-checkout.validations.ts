@@ -3,14 +3,16 @@ import { objectId } from './custom.validation.js';
 
 export const createCheckout = {
   body: Joi.object().keys({
-    firstName: Joi.string().required(),
-    lastName: Joi.string().required(),
+    first_name: Joi.string().required(),
+    last_name: Joi.string().required(),
     email: Joi.string().email().required(),
-    phone: Joi.string().allow('', null).optional(),
-    company: Joi.string().allow('', null).optional(),
-    planId: Joi.string().custom(objectId).required(),
+    contact_number: Joi.string().allow('', null).optional(),
+    company_name: Joi.string().allow('', null).optional(),
+    country_name: Joi.string().allow('', null).optional(),
+    plan_id: Joi.string().custom(objectId).required(),
+    billing_cycle: Joi.string().valid('month', 'quarterly').required(),
     gateway: Joi.string().valid('stripe', 'razorpay').required(),
-    successUrl: Joi.string().uri().required(),
-    cancelUrl: Joi.string().uri().required(),
+    success_url: Joi.string().uri().required(),
+    cancel_url: Joi.string().uri().required(),
   }),
 };

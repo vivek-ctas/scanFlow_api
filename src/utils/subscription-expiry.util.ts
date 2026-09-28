@@ -1,6 +1,6 @@
 import moment from 'moment';
 
-export const BILLING_CYCLES = ['monthly', 'yearly'] as const;
+export const BILLING_CYCLES = ['month', 'quarterly'] as const;
 
 export const USAGE_RETENTION_DAYS = 365;
 
@@ -12,8 +12,8 @@ export const computeExpiresAt = (
   if (trialDays > 0) {
     return moment(from).add(trialDays, 'days').toDate();
   }
-  if (billingCycle === 'yearly') {
-    return moment(from).add(1, 'year').toDate();
+  if (billingCycle === 'quarterly') {
+    return moment(from).add(3, 'months').toDate();
   }
   return moment(from).add(1, 'month').toDate();
 };
