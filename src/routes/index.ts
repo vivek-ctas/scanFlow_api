@@ -7,8 +7,14 @@ import { webhooksRouter } from './user/webhooks.route.js';
 import { publicCheckoutRouter } from './public-checkout.route.js';
 import { plansRouter } from './admin/plans.route.js';
 import { guestLeadsRouter } from './admin/guest-leads.route.js';
+import { countriesRouter } from './countries.route.js';
 
-export const PUBLIC_PATHS = ['/auth', '/health', '/public-checkout'];
+export const PUBLIC_PATHS = [
+  '/auth',
+  '/health',
+  '/public-checkout',
+  '/countries',
+];
 
 const router = Router();
 
@@ -20,6 +26,7 @@ router.use('/webhooks', webhooksRouter);
 router.use('/public-checkout', publicCheckoutRouter);
 router.use('/plans', plansRouter);
 router.use('/guest-leads', guestLeadsRouter);
+router.use('/countries', countriesRouter);
 
 router.get('/health', (req, res) => {
   res.status(200).json({

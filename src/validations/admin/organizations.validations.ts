@@ -12,6 +12,7 @@ export const createOrganization = {
     name: Joi.string().required(),
     email: Joi.string().email().allow('', null).optional(),
     contact_number: Joi.string().allow('', null).optional(),
+    country_name: Joi.string().allow('', null).optional(),
     status: Joi.number().integer().valid(0, 1).optional().default(1),
     admin_email: Joi.string().email().required(),
     admin_first_name: Joi.string().optional(),
@@ -41,6 +42,7 @@ export const updateOrganization = {
       name: Joi.string().optional(),
       email: Joi.string().email().allow('', null).optional(),
       contact_number: Joi.string().allow('', null).optional(),
+      country_name: Joi.string().allow('', null).optional(),
       status: Joi.number().integer().valid(0, 1, 2).optional(),
     })
     .min(1),

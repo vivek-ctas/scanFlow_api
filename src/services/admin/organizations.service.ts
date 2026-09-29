@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import { Organization } from '../../models/organization.model.js';
 import { User } from '../../models/user.model.js';
+import { Subscription } from '../../models/subscription.model.js';
 import { ApiError } from '../../utils/ApiError.js';
 import {
   computeStatus,
@@ -26,6 +27,7 @@ export const createOrganization = async (
     name: orgBody.name,
     email: orgBody.email,
     contact_number: orgBody.contact_number,
+    country_name: orgBody.country_name,
     status: orgBody.status ?? 1,
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
@@ -50,6 +52,35 @@ export const createOrganization = async (
   );
 };
 
+const buildSubscriptionSummaryMap = async (orgIds: string[]) => {
+  const subs = await Subscription.find({
+    organization_id: { $in: orgIds.map((id) => toObjectId(id)) },
+    status: { $in: ['active', 'future'] },
+  }).select(
+    'organization_id plan_id plan_name billing_cycle status started_at expires_at',
+  );
+
+  const planMap: Record<string, any> = {};
+  const futureCountMap: Record<string, number> = {};
+  for (const sub of subs) {
+    const orgId = String(sub.organization_id);
+    if (sub.status === 'active' && !planMap[orgId]) {
+      planMap[orgId] = {
+        plan_id: sub.plan_id,
+        plan_name: sub.plan_name,
+        billing_cycle: sub.billing_cycle,
+        started_at: sub.started_at,
+        expires_at: sub.expires_at,
+        status: sub.status,
+      };
+    }
+    if (sub.status === 'future') {
+      futureCountMap[orgId] = (futureCountMap[orgId] ?? 0) + 1;
+    }
+  }
+  return { planMap, futureCountMap };
+};
+
 export const listOrganizations = async (
   filter: Record<string, any>,
   options: Record<string, any>,
@@ -66,8 +97,19 @@ export const listOrganizations = async (
   }
 
   const orgs = await (Organization as any).paginate(query, options);
+  const orgIds = orgs.results.map((org: any) => String(org._id));
+  const { planMap, futureCountMap } = await buildSubscriptionSummaryMap(orgIds);
+  const results = orgs.results.map((org: any) => {
+    const orgId = String(org._id);
+    const plain = typeof org.toJSON === 'function' ? org.toJSON() : { ...org };
+    return {
+      ...plain,
+      plan: planMap[orgId] ?? null,
+      future_queue_count: futureCountMap[orgId] ?? 0,
+    };
+  });
   return createResponse(httpStatus.OK, 'Organizations fetched successfully.', {
-    results: orgs.results,
+    results,
     page: orgs.page,
     limit: orgs.limit,
     total_pages: orgs.total_pages,
@@ -83,7 +125,13 @@ export const getOrganizationById = async (organizationId: string) => {
   return org;
 };
 
-const ORG_UPDATE_KEYS = ['name', 'email', 'contact_number', 'status'];
+const ORG_UPDATE_KEYS = [
+  'name',
+  'email',
+  'contact_number',
+  'country_name',
+  'status',
+];
 
 export const updateOrganizationById = async (
   organizationId: string,

@@ -11,3 +11,4 @@ export { Payment } from './payment.model.js';
 export { Scan } from './scan.model.js';
 export { WebhookConfig } from './webhook-config.model.js';
 export { WebhookDelivery } from './webhook-delivery.model.js';
+export { Country } from './country.model.js';
