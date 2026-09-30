@@ -10,7 +10,9 @@ export const createCheckout = {
     company_name: Joi.string().allow('', null).optional(),
     country_name: Joi.string().allow('', null).optional(),
     plan_id: Joi.string().custom(objectId).required(),
-    billing_cycle: Joi.string().valid('month', 'quarterly').required(),
+    // Optional: the plan's own billing_cycle is used when omitted. When sent it
+    // must match the plan, otherwise the request is rejected.
+    billing_cycle: Joi.string().valid('month', 'quarterly').optional(),
     gateway: Joi.string().valid('stripe', 'razorpay').required(),
     success_url: Joi.string().uri().required(),
     cancel_url: Joi.string().uri().required(),

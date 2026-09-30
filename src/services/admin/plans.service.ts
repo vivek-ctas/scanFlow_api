@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import { Plan } from '../../models/plan.model.js';
 import { ApiError } from '../../utils/ApiError.js';
+import { computeQuarterlyPrice } from '../../utils/plan-features.util.js';
 import {
   computeStatus,
   createResponse,
@@ -13,6 +14,7 @@ const PLAN_UPDATE_KEYS = [
   'desc',
   'price',
   'price_quarterly',
+  'billing_cycle',
   'currency',
   'trial_days',
   'features',
@@ -36,8 +38,16 @@ export const createPlan = async (planBody: Record<string, any>) => {
   if (await planNameTaken(planBody.name)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Plan name already exists');
   }
+  const billingCycle = planBody.billing_cycle ?? 'month';
   const plan = await Plan.create({
     ...planBody,
+    billing_cycle: billingCycle,
+    price_quarterly: computeQuarterlyPrice(
+      billingCycle,
+      planBody.price,
+      planBody.discount ?? 0,
+      planBody.price_quarterly,
+    ),
     status: planBody.status ?? 1,
   });
   return createResponse(httpStatus.CREATED, 'Plan created successfully.', {
@@ -121,11 +131,29 @@ export const updatePlanById = async (
   if (updateBody.name && (await planNameTaken(updateBody.name, planId))) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Plan name already exists');
   }
+  const cycleChanged = updateBody.billing_cycle !== undefined;
+  const priceChanged =
+    updateBody.price !== undefined ||
+    updateBody.discount !== undefined ||
+    updateBody.price_quarterly !== undefined;
+
   PLAN_UPDATE_KEYS.forEach((key) => {
     if (updateBody[key] !== undefined) {
       (plan as any)[key] = updateBody[key];
     }
   });
+
+  // `price_quarterly` is derived, never taken verbatim: recompute it whenever the
+  // cycle flips or anything feeding the derivation changes.
+  if (cycleChanged || priceChanged) {
+    plan.price_quarterly = computeQuarterlyPrice(
+      plan.billing_cycle,
+      plan.price,
+      plan.discount,
+      updateBody.price_quarterly,
+    );
+  }
+
   await plan.save();
   return plan;
 };

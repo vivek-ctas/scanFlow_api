@@ -5,6 +5,10 @@ import { Plan } from '../../models/plan.model.js';
 import { Subscription } from '../../models/subscription.model.js';
 import { ApiError } from '../../utils/ApiError.js';
 import {
+  planPriceErrorMessage,
+  resolvePlanPrice,
+} from '../../utils/plan-features.util.js';
+import {
   computeStatus,
   createResponse,
   escapeRegExp,
@@ -46,7 +50,6 @@ export const createOrganization = async (
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
 
-  const billingCycle = orgBody.billing_cycle ?? 'month';
   if (orgBody.plan_id) {
     const plan = await Plan.findById(orgBody.plan_id);
     if (!plan || plan.status !== 1) {
@@ -55,10 +58,13 @@ export const createOrganization = async (
         'Plan not found or not active',
       );
     }
-    if (billingCycle === 'quarterly' && !(plan.price_quarterly ?? 0)) {
+    // Fail fast, before any write: the requested cycle must match the plan's cycle.
+    try {
+      resolvePlanPrice(plan, orgBody.billing_cycle);
+    } catch {
       throw new ApiError(
         httpStatus.BAD_REQUEST,
-        'Quarterly pricing is not configured for this plan',
+        planPriceErrorMessage(plan, orgBody.billing_cycle ?? 'month'),
       );
     }
   }
@@ -87,7 +93,7 @@ export const createOrganization = async (
     data.subscription = await grantSubscription(
       String(org._id),
       String(orgBody.plan_id),
-      { billingCycle },
+      { billingCycle: orgBody.billing_cycle },
     );
   }
 

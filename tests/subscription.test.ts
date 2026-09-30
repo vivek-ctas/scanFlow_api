@@ -178,7 +178,11 @@ describe('subscription lifecycle (§3 + §8)', () => {
 
   it('quarterly grant without price_quarterly is rejected (400)', async () => {
     const org = await createOrg();
-    const plan = await createPlan({ price: 100, price_quarterly: null });
+    const plan = await createPlan({
+      price: 100,
+      price_quarterly: null,
+      billing_cycle: 'quarterly',
+    });
     await expect(
       grant(String(org._id), String(plan._id), {
         trialDays: 0,
@@ -190,9 +194,44 @@ describe('subscription lifecycle (§3 + §8)', () => {
     });
   });
 
+  it('grant on a cycle the plan does not sell is rejected (400)', async () => {
+    const org = await createOrg();
+    // Monthly-only plan, quarterly requested.
+    const plan = await createPlan({
+      price: 100,
+      price_quarterly: 300,
+      billing_cycle: 'month',
+    });
+    await expect(
+      grant(String(org._id), String(plan._id), {
+        trialDays: 0,
+        billingCycle: 'quarterly',
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Test Plan is only available on the monthly billing cycle',
+    });
+  });
+
+  it('grant defaults to the plan billing_cycle when none is given', async () => {
+    const org = await createOrg();
+    const plan = await createPlan({
+      price: 100,
+      price_quarterly: 250,
+      billing_cycle: 'quarterly',
+    });
+    const sub = await grant(String(org._id), String(plan._id));
+    expect(sub.billing_cycle).toBe('quarterly');
+    expect(sub.plan_price).toBe(250);
+  });
+
   it('manual grant creates a TXN_SUCCESS payment and links it', async () => {
     const org = await createOrg();
-    const plan = await createPlan({ price: 250, price_quarterly: 600 });
+    const plan = await createPlan({
+      price: 250,
+      price_quarterly: 600,
+      billing_cycle: 'quarterly',
+    });
     const sub = await grant(String(org._id), String(plan._id), {
       trialDays: 0,
       billingCycle: 'quarterly',

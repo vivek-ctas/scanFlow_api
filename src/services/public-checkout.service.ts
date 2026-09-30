@@ -9,7 +9,10 @@ import {
   normalizeEmail,
   toObjectId,
 } from './common.service.js';
-import { priceForCycle } from '../utils/plan-features.util.js';
+import {
+  planPriceErrorMessage,
+  resolvePlanPrice,
+} from '../utils/plan-features.util.js';
 import { isStripeConfigured, createCheckoutSession } from './stripe.service.js';
 import {
   isRazorpayConfigured,
@@ -38,7 +41,7 @@ export const createCheckout = async ({
   company_name?: string;
   country_name?: string;
   plan_id: string;
-  billing_cycle: BillingCycle;
+  billing_cycle?: BillingCycle;
   gateway: PaymentGateway;
   success_url: string;
   cancel_url: string;
@@ -55,17 +58,19 @@ export const createCheckout = async ({
     );
   }
 
+  // The plan decides its cycle; an explicit request is only honoured when it matches.
   let price: number;
+  let cycle: BillingCycle;
   try {
-    price = priceForCycle(plan.price, plan.price_quarterly, billing_cycle);
-  } catch (err: any) {
-    if (err.message === 'PLAN_QUARTERLY_PRICE_REQUIRED') {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Quarterly pricing is not configured for this plan',
-      );
-    }
-    throw err;
+    ({ price, billingCycle: cycle } = resolvePlanPrice(plan, billing_cycle));
+  } catch {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      planPriceErrorMessage(
+        plan,
+        billing_cycle ?? plan.billing_cycle ?? 'month',
+      ),
+    );
   }
 
   const lead = await GuestLead.create({
@@ -76,6 +81,7 @@ export const createCheckout = async ({
     company_name,
     country_name,
     plan_id: plan._id,
+    billing_cycle: cycle,
     currency_code: cartCurrency(plan.currency),
     trial_days: plan.trial_days,
     status: 'initiated',
@@ -133,7 +139,7 @@ export const createCheckout = async ({
     order_id: checkout.session_id ?? checkout.order_id,
     price,
     currency_code: currency,
-    billing_cycle,
+    billing_cycle: cycle,
     status: 'CREATED',
   });
 

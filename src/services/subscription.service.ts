@@ -1,7 +1,7 @@
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import { Organization } from '../models/organization.model.js';
-import { Plan, IPlan } from '../models/plan.model.js';
+import { Plan } from '../models/plan.model.js';
 import {
   Subscription,
   ISubscription,
@@ -16,7 +16,11 @@ import {
   computeExpiresAt,
   USAGE_RETENTION_DAYS,
 } from '../utils/subscription-expiry.util.js';
-import { scanLimitOf, priceForCycle } from '../utils/plan-features.util.js';
+import {
+  planPriceErrorMessage,
+  resolvePlanPrice,
+  scanLimitOf,
+} from '../utils/plan-features.util.js';
 import {
   writeActiveSubscriptionCache,
   deleteActiveSubscriptionCache,
@@ -156,23 +160,6 @@ export const createUsageForSubscription = async (
     ),
   });
 
-const planPriceFor = (
-  plan: IPlan,
-  billingCycle: 'month' | 'quarterly',
-): number => {
-  try {
-    return priceForCycle(plan.price, plan.price_quarterly, billingCycle);
-  } catch (err: any) {
-    if (err.message === 'PLAN_QUARTERLY_PRICE_REQUIRED') {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Quarterly pricing is not configured for this plan',
-      );
-    }
-    throw err;
-  }
-};
-
 const decideInitialStatus = async (
   organizationId: string,
   billingCycle: 'month' | 'quarterly',
@@ -238,9 +225,21 @@ export const grantSubscription = async (
   if (!plan || plan.status !== 1) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Plan not found or not active');
   }
-  const billingCycle = options.billingCycle ?? 'month';
+  // The plan dictates its cycle; an explicit cycle is only honoured when it matches.
+  let billingCycle: 'month' | 'quarterly';
+  let planPrice: number;
+  try {
+    ({ billingCycle, price: planPrice } = resolvePlanPrice(
+      plan,
+      options.billingCycle,
+    ));
+  } catch {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      planPriceErrorMessage(plan, options.billingCycle ?? 'month'),
+    );
+  }
   const trialDays = options.trialDays ?? 0;
-  const planPrice = planPriceFor(plan, billingCycle);
   const decided = await decideInitialStatus(
     organizationId,
     billingCycle,
@@ -510,7 +509,7 @@ export const forceActivateSubscription = async (
   const created = await grantSubscription(organizationId, planId, {
     trialDays: options.trialDays ?? 0,
     forceActive: true,
-    billingCycle: options.billingCycle ?? 'month',
+    billingCycle: options.billingCycle,
   });
   await normalizeQueuePriorities(organizationId);
   return createResponse(httpStatus.OK, 'Subscription force-activated.', {

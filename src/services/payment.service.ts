@@ -108,7 +108,8 @@ export const processGatewaySuccess = async ({
       String(payment.plan_id),
       {
         trialDays: lead.trial_days,
-        billingCycle: payment.billing_cycle,
+        // The lead carries the cycle that was quoted at checkout.
+        billingCycle: lead.billing_cycle ?? payment.billing_cycle,
         paymentId: String(payment._id),
       },
     );

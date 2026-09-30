@@ -3,7 +3,7 @@ import config from '../config/config.js';
 import { logger } from '../config/logger.js';
 import { Organization } from '../models/organization.model.js';
 import { User } from '../models/user.model.js';
-import { Plan } from '../models/plan.model.js';
+import { Plan, type BillingCycle } from '../models/plan.model.js';
 import { Usage } from '../models/usage.model.js';
 import { Scan } from '../models/scan.model.js';
 import { WebhookConfig } from '../models/webhook-config.model.js';
@@ -11,14 +11,32 @@ import { WebhookDelivery } from '../models/webhook-delivery.model.js';
 import { SUPER_ADMIN_ROLE } from '../config/roles.js';
 import { grantSubscription } from '../services/subscription.service.js';
 import { writeActiveSubscriptionCache } from '../services/quota.service.js';
-import { scanLimitOf } from '../utils/plan-features.util.js';
+import {
+  computeQuarterlyPrice,
+  scanLimitOf,
+} from '../utils/plan-features.util.js';
 
 const COMMON_PASSWORD = 'Scanflow@123';
 
-const PLAN_SEED = [
+interface PlanSeed {
+  name: string;
+  desc: string;
+  billing_cycle: BillingCycle;
+  price: number;
+  price_quarterly: number | null;
+  currency: string;
+  trial_days: number;
+  scan_limit: number;
+  marketing_features: string[];
+  is_popular: boolean;
+  discount: number;
+}
+
+const PLAN_SEED: PlanSeed[] = [
   {
     name: 'Starter',
     desc: 'For small shops getting started with scan capture.',
+    billing_cycle: 'month',
     price: 1499,
     price_quarterly: 3999,
     currency: 'inr',
@@ -36,6 +54,7 @@ const PLAN_SEED = [
   {
     name: 'Growth',
     desc: 'For growing retail teams with steady scan volume.',
+    billing_cycle: 'month',
     price: 2999,
     price_quarterly: 7999,
     currency: 'inr',
@@ -53,6 +72,7 @@ const PLAN_SEED = [
   {
     name: 'Pro',
     desc: 'For multi-branch businesses with heavy scan usage.',
+    billing_cycle: 'quarterly',
     price: 5999,
     price_quarterly: 15999,
     currency: 'inr',
@@ -70,6 +90,7 @@ const PLAN_SEED = [
   {
     name: 'Enterprise',
     desc: 'Custom volume and SLA-backed support.',
+    billing_cycle: 'month',
     price: 14999,
     price_quarterly: 39999,
     currency: 'inr',
@@ -241,7 +262,13 @@ const run = async () => {
       name: p.name,
       desc: p.desc,
       price: p.price,
-      price_quarterly: p.price_quarterly,
+      price_quarterly: computeQuarterlyPrice(
+        p.billing_cycle,
+        p.price,
+        p.discount,
+        p.price_quarterly,
+      ),
+      billing_cycle: p.billing_cycle,
       currency: p.currency,
       trial_days: p.trial_days,
       features: [{ features_name: 'scan', scan_limit: p.scan_limit }],
@@ -252,7 +279,7 @@ const run = async () => {
       discount: p.discount,
     });
     plans[p.name] = doc;
-    logger.info(`[SEED] Plan "${p.name}" -> ${doc._id}`);
+    logger.info(`[SEED] Plan "${p.name}" (${p.billing_cycle}) -> ${doc._id}`);
   }
 
   const superAdmin = await User.create({

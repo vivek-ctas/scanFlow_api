@@ -12,12 +12,15 @@ const featureObject = Joi.object().keys({
   scan_limit: Joi.number().integer().min(0).optional().default(0),
 });
 
+const billingCycle = Joi.string().valid('month', 'quarterly');
+
 export const createPlan = {
   body: Joi.object().keys({
     name: Joi.string().required(),
     desc: Joi.string().allow('', null).optional(),
     price: Joi.number().min(0).required(),
     price_quarterly: Joi.number().min(0).allow(null).optional(),
+    billing_cycle: billingCycle.optional().default('month'),
     currency: Joi.string().trim().lowercase().optional().default('inr'),
     trial_days: Joi.number().integer().min(0).optional().default(0),
     features: Joi.array().items(featureObject).optional().default([]),
@@ -54,6 +57,7 @@ export const updatePlan = {
       desc: Joi.string().allow('', null).optional(),
       price: Joi.number().min(0).optional(),
       price_quarterly: Joi.number().min(0).allow(null).optional(),
+      billing_cycle: billingCycle.optional(),
       currency: Joi.string().trim().lowercase().optional(),
       trial_days: Joi.number().integer().min(0).optional(),
       features: Joi.array().items(featureObject).optional(),

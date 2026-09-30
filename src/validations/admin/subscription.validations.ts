@@ -22,7 +22,8 @@ export const assignPlan = {
   body: Joi.object()
     .keys({
       plan_id: Joi.string().custom(objectId).required(),
-      billing_cycle: billingCycle.optional().default('month'),
+      // Optional: defaults to the plan's own billing_cycle. Must match when sent.
+      billing_cycle: billingCycle.optional(),
     })
     .min(1),
 };
@@ -54,7 +55,7 @@ export const forceActivateSubscription = {
   body: Joi.object()
     .keys({
       plan_id: Joi.string().custom(objectId).required(),
-      billing_cycle: billingCycle.optional().default('month'),
+      billing_cycle: billingCycle.optional(),
       trial_days: Joi.number().integer().min(0).optional().default(0),
     })
     .min(1),

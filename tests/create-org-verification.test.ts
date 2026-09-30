@@ -9,7 +9,11 @@ describe('simple create-org contract (saas-style)', () => {
   it('creates org + admin user + inline subscription from one simple payload', async () => {
     const admin = await createAdminUser();
     const tokens = await generateAuthTokens(admin as any);
-    const plan = await createPlan({ scan_limit: 12, price_quarterly: 200 });
+    const plan = await createPlan({
+      scan_limit: 12,
+      price_quarterly: 200,
+      billing_cycle: 'quarterly',
+    });
 
     const res = await request(app)
       .post('/api/organizations')
@@ -59,7 +63,11 @@ describe('simple create-org contract (saas-style)', () => {
   it('rejects quarterly plan without quarterly pricing and creates no partial data', async () => {
     const admin = await createAdminUser();
     const tokens = await generateAuthTokens(admin as any);
-    const plan = await createPlan({ scan_limit: 5, price_quarterly: null });
+    const plan = await createPlan({
+      scan_limit: 5,
+      price_quarterly: null,
+      billing_cycle: 'quarterly',
+    });
 
     const res = await request(app)
       .post('/api/organizations')
@@ -79,6 +87,60 @@ describe('simple create-org contract (saas-style)', () => {
     );
     expect(await Organization.findOne({ email: 'quarterly@acme.com' })).toBeNull();
     expect(await User.findOne({ email: 'quarterly@acme.com' })).toBeNull();
+  });
+
+  it('rejects a billing_cycle the plan does not sell and creates no partial data', async () => {
+    const admin = await createAdminUser();
+    const tokens = await generateAuthTokens(admin as any);
+    const plan = await createPlan({
+      scan_limit: 5,
+      price_quarterly: 300,
+      billing_cycle: 'month',
+    });
+
+    const res = await request(app)
+      .post('/api/organizations')
+      .set('authorization', `Bearer ${tokens.access_token}`)
+      .send({
+        first_name: 'Cycle',
+        last_name: 'Mismatch',
+        company_name: 'Mismatch Co',
+        email: 'mismatch@acme.com',
+        plan_id: String(plan._id),
+        billing_cycle: 'quarterly',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe(
+      'Test Plan is only available on the monthly billing cycle',
+    );
+    expect(await Organization.findOne({ email: 'mismatch@acme.com' })).toBeNull();
+    expect(await User.findOne({ email: 'mismatch@acme.com' })).toBeNull();
+  });
+
+  it('omitted billing_cycle falls back to the plan own cycle', async () => {
+    const admin = await createAdminUser();
+    const tokens = await generateAuthTokens(admin as any);
+    const plan = await createPlan({
+      scan_limit: 7,
+      price_quarterly: 180,
+      billing_cycle: 'quarterly',
+    });
+
+    const res = await request(app)
+      .post('/api/organizations')
+      .set('authorization', `Bearer ${tokens.access_token}`)
+      .send({
+        first_name: 'Cycle',
+        last_name: 'Default',
+        company_name: 'Defaulted Co',
+        email: 'defaulted@acme.com',
+        plan_id: String(plan._id),
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.subscription.billing_cycle).toBe('quarterly');
+    expect(res.body.data.subscription.plan_price).toBe(180);
   });
 
   it('creates org + admin (no plan) from simple payload and still matches legacy fallback', async () => {
