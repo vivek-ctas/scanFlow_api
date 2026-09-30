@@ -17,7 +17,7 @@ const tokenFor = async (user: any) => {
 
 const seedGuestLeads = async () => {
   const plan = await createPlan({ name: 'Starter', price: 99 });
-  const o2 = await Organization.create({ name: 'Org 2', status: 1 });
+  const o2 = await Organization.create({ company_name: 'Org 2', status: 1 });
   const leads = [
     {
       first_name: 'Alice',

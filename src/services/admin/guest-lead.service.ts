@@ -70,7 +70,7 @@ export const getGuestLeadById = async (
       'plan_id',
       'name price price_quarterly currency trial_days status',
     )
-    .populate('organization_id', 'name');
+    .populate('organization_id', 'company_name');
   if (!lead) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Guest lead not found');
   }

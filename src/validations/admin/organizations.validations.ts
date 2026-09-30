@@ -8,17 +8,34 @@ const orgIdParams = {
 };
 
 export const createOrganization = {
-  body: Joi.object().keys({
-    name: Joi.string().required(),
-    email: Joi.string().email().allow('', null).optional(),
-    contact_number: Joi.string().allow('', null).optional(),
-    country_name: Joi.string().allow('', null).optional(),
-    status: Joi.number().integer().valid(0, 1).optional().default(1),
-    admin_email: Joi.string().email().required(),
-    admin_first_name: Joi.string().optional(),
-    admin_last_name: Joi.string().optional(),
-    admin_contact_no: Joi.string().allow('', null).optional(),
-  }),
+  body: Joi.alternatives().try(
+    Joi.object().keys({
+      first_name: Joi.string().required(),
+      last_name: Joi.string().required(),
+      company_name: Joi.string().required(),
+      email: Joi.string().email().required(),
+      contact_number: Joi.string().allow('', null).optional(),
+      country_name: Joi.string().allow('', null).optional(),
+      business_address: Joi.string().allow('', null).optional(),
+      status: Joi.number().integer().valid(0, 1).optional().default(1),
+      plan_id: Joi.string().custom(objectId).optional(),
+      billing_cycle: Joi.string().valid('month', 'quarterly').optional(),
+    }),
+    Joi.object().keys({
+      name: Joi.string().optional(),
+      email: Joi.string().email().allow('', null).optional(),
+      contact_number: Joi.string().allow('', null).optional(),
+      country_name: Joi.string().allow('', null).optional(),
+      status: Joi.number().integer().valid(0, 1).optional().default(1),
+      admin_email: Joi.string().email().required(),
+      admin_first_name: Joi.string().optional(),
+      admin_last_name: Joi.string().optional(),
+      admin_contact_no: Joi.string().allow('', null).optional(),
+      admin_company_name: Joi.string().allow('', null).optional(),
+      admin_country_name: Joi.string().allow('', null).optional(),
+      admin_business_address: Joi.string().allow('', null).optional(),
+    }),
+  ),
 };
 
 export const listOrganizations = {
@@ -39,6 +56,7 @@ export const updateOrganization = {
   ...orgIdParams,
   body: Joi.object()
     .keys({
+      company_name: Joi.string().optional(),
       name: Joi.string().optional(),
       email: Joi.string().email().allow('', null).optional(),
       contact_number: Joi.string().allow('', null).optional(),

@@ -3,7 +3,7 @@ import { toJSON } from './plugins/toJSON.plugin.js';
 import { paginate } from './plugins/paginate.plugin.js';
 
 export interface IOrganization extends Document {
-  name: string;
+  company_name: string;
   email?: string;
   contact_number?: string;
   country_name?: string;
@@ -23,7 +23,7 @@ interface IOrganizationModel extends Model<IOrganization> {
 
 const organizationSchema = new Schema<IOrganization, IOrganizationModel>(
   {
-    name: { type: String, required: true, trim: true },
+    company_name: { type: String, required: true, trim: true },
     email: { type: String, trim: true },
     contact_number: { type: String, trim: true },
     country_name: { type: String, trim: true },

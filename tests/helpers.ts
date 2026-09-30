@@ -60,7 +60,7 @@ export const dropCollections = async (): Promise<void> => {
 };
 
 export const createOrg = async (overrides: Record<string, any> = {}) =>
-  Organization.create({ name: 'Test Org', status: 1, ...overrides });
+  Organization.create({ company_name: 'Test Org', status: 1, ...overrides });
 
 export const createPlan = async (overrides: Record<string, any> = {}) => {
   const { scan_limit, ...rest } = overrides;

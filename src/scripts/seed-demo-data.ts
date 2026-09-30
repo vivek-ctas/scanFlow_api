@@ -272,7 +272,7 @@ const run = async () => {
   // Insert multiple organizations at once, then track the created docs by name.
   const orgDocs = await Organization.insertMany(
     ORG_SEED.map((o) => ({
-      name: o.name,
+      company_name: o.name,
       email: o.email,
       contact_number: o.contact_number,
       status: 1,
@@ -370,7 +370,7 @@ const run = async () => {
     const startMs = new Date(sub.started_at).getTime();
     const spanMs = Math.max(1, now - startMs);
     const scanDocs: any[] = [];
-    const seed = org.name.length * 13 + orgSeed.used;
+    const seed = org.company_name.length * 13 + orgSeed.used;
 
     const scanForUser = (index: number) => {
       const operatorPool = orgUsers.filter((u) => u.role === 'OPERATOR');

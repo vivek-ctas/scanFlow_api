@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import { Organization } from '../../models/organization.model.js';
 import { User } from '../../models/user.model.js';
+import { Plan } from '../../models/plan.model.js';
 import { Subscription } from '../../models/subscription.model.js';
 import { ApiError } from '../../utils/ApiError.js';
 import {
@@ -10,21 +11,60 @@ import {
   normalizeEmail,
   toObjectId,
 } from '../common.service.js';
+import { grantSubscription } from '../subscription.service.js';
 
 export const createOrganization = async (
   orgBody: Record<string, any>,
   createdBy?: string,
 ) => {
-  const adminEmail = normalizeEmail(orgBody.admin_email);
-  if (!adminEmail) {
+  const isLegacy = orgBody.admin_email !== undefined;
+
+  const adminFields = isLegacy
+    ? {
+        first_name: orgBody.admin_first_name || 'Organization',
+        last_name: orgBody.admin_last_name || 'Admin',
+        email: normalizeEmail(orgBody.admin_email),
+        contact_number: orgBody.admin_contact_no,
+        company_name: orgBody.admin_company_name,
+        country_name: orgBody.admin_country_name,
+        business_address: orgBody.admin_business_address,
+      }
+    : {
+        first_name: orgBody.first_name,
+        last_name: orgBody.last_name,
+        email: normalizeEmail(orgBody.email),
+        contact_number: orgBody.contact_number,
+        company_name: orgBody.company_name,
+        country_name: orgBody.country_name,
+        business_address: orgBody.business_address,
+      };
+
+  if (!adminFields.email) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'admin_email is required');
   }
-  if (await User.isEmailTaken(adminEmail)) {
+  if (await User.isEmailTaken(adminFields.email)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
 
+  const billingCycle = orgBody.billing_cycle ?? 'month';
+  if (orgBody.plan_id) {
+    const plan = await Plan.findById(orgBody.plan_id);
+    if (!plan || plan.status !== 1) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Plan not found or not active',
+      );
+    }
+    if (billingCycle === 'quarterly' && !(plan.price_quarterly ?? 0)) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Quarterly pricing is not configured for this plan',
+      );
+    }
+  }
+
   const org = await Organization.create({
-    name: orgBody.name,
+    company_name: orgBody.company_name ?? orgBody.name,
     email: orgBody.email,
     contact_number: orgBody.contact_number,
     country_name: orgBody.country_name,
@@ -33,10 +73,7 @@ export const createOrganization = async (
   });
 
   const admin = await User.create({
-    first_name: orgBody.admin_first_name || 'Organization',
-    last_name: orgBody.admin_last_name || 'Admin',
-    email: adminEmail,
-    contact_number: orgBody.admin_contact_no,
+    ...adminFields,
     role: 'ORGANIZATION_ADMIN',
     organization_id: org._id,
     is_super_admin: false,
@@ -45,10 +82,19 @@ export const createOrganization = async (
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
 
+  const data: Record<string, any> = { organization: org, admin };
+  if (orgBody.plan_id) {
+    data.subscription = await grantSubscription(
+      String(org._id),
+      String(orgBody.plan_id),
+      { billingCycle },
+    );
+  }
+
   return createResponse(
     httpStatus.CREATED,
     'Organization created successfully.',
-    { organization: org, admin },
+    data,
   );
 };
 
@@ -93,7 +139,7 @@ export const listOrganizations = async (
   }
   if (filter.search) {
     const regex = new RegExp(escapeRegExp(String(filter.search)), 'i');
-    query.$or = [{ name: regex }, { email: regex }];
+    query.$or = [{ company_name: regex }, { email: regex }];
   }
 
   const orgs = await (Organization as any).paginate(query, options);
@@ -126,7 +172,7 @@ export const getOrganizationById = async (organizationId: string) => {
 };
 
 const ORG_UPDATE_KEYS = [
-  'name',
+  'company_name',
   'email',
   'contact_number',
   'country_name',
@@ -139,13 +185,25 @@ export const updateOrganizationById = async (
   modifiedBy?: string,
 ) => {
   const org = await getOrganizationById(organizationId);
+  const normalized = { ...updateBody };
+  if (normalized.company_name === undefined && normalized.name !== undefined) {
+    normalized.company_name = normalized.name;
+  }
   ORG_UPDATE_KEYS.forEach((key) => {
-    if (updateBody[key] !== undefined) {
-      (org as any)[key] = updateBody[key];
+    if (normalized[key] !== undefined) {
+      (org as any)[key] = normalized[key];
     }
   });
   org.modified_by = modifiedBy ? toObjectId(modifiedBy) : null;
   await org.save();
+
+  if (normalized.company_name !== undefined) {
+    await User.updateOne(
+      { organization_id: org._id, role: 'ORGANIZATION_ADMIN' },
+      { $set: { company_name: normalized.company_name } },
+    );
+  }
+
   return org;
 };
 
