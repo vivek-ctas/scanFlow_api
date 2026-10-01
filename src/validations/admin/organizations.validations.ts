@@ -61,6 +61,9 @@ export const updateOrganization = {
       email: Joi.string().email().allow('', null).optional(),
       contact_number: Joi.string().allow('', null).optional(),
       country_name: Joi.string().allow('', null).optional(),
+      first_name: Joi.string().allow('', null).optional(),
+      last_name: Joi.string().allow('', null).optional(),
+      business_address: Joi.string().allow('', null).optional(),
       status: Joi.number().integer().valid(0, 1, 2).optional(),
     })
     .min(1),

@@ -88,4 +88,25 @@ router.post(
   subscriptionController.forceActivateSubscription,
 );
 
+router.post(
+  '/:organizationId/subscription/cancel-queued',
+  auth('manageSubscriptions'),
+  validate(subscriptionValidation.cancelQueuedSubscription),
+  subscriptionController.cancelQueuedSubscription,
+);
+
+router.post(
+  '/:organizationId/subscription/reorder-queue',
+  auth('manageSubscriptions'),
+  validate(subscriptionValidation.reorderSubscriptionQueue),
+  subscriptionController.reorderSubscriptionQueue,
+);
+
+router.post(
+  '/:organizationId/subscription/limits/adjust',
+  auth('manageSubscriptions'),
+  validate(subscriptionValidation.adjustScanLimits),
+  subscriptionController.adjustScanLimits,
+);
+
 export const organizationsRouter = router;

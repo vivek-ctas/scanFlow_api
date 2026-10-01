@@ -30,7 +30,9 @@ export const listOrganizations = catchAsync(
 
 export const getOrganization = catchAsync(
   async (req: Request, res: Response) => {
-    const org = await organizationService.getOrganizationById(orgIdParam(req));
+    const org = await organizationService.getOrganizationWithAdmin(
+      orgIdParam(req),
+    );
     res.status(httpStatus.OK).json(
       createResponse(httpStatus.OK, 'Organization fetched successfully.', {
         organization: org,

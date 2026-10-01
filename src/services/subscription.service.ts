@@ -39,6 +39,33 @@ const futureQuery = (organizationId: string) => ({
   status: 'future' as SubscriptionStatus,
 });
 
+/**
+ * Flattens a Subscription document for the admin API: `plan_id` is always a plain
+ * id even when the query populated the plan, so clients can rely on one shape.
+ */
+const toSubscriptionView = (sub: any) => {
+  const populatedPlan =
+    sub.plan_id && typeof sub.plan_id === 'object' ? sub.plan_id : null;
+  return {
+    id: String(sub._id),
+    organization_id: String(sub.organization_id),
+    plan_id: String(populatedPlan?._id ?? sub.plan_id),
+    plan_name: sub.plan_name ?? populatedPlan?.name ?? '',
+    plan_price: sub.plan_price ?? 0,
+    currency_code: sub.currency_code ?? 'inr',
+    billing_cycle: sub.billing_cycle,
+    status: sub.status,
+    started_at: sub.started_at,
+    expires_at: sub.expires_at,
+    queue_priority: sub.queue_priority ?? 0,
+    trial_days: sub.trial_days ?? 0,
+    features: sub.features ?? [],
+    marketing_features: sub.marketing_features ?? [],
+    is_plan_cancel: sub.is_plan_cancel ?? false,
+    cancellation_reason: sub.cancellation_reason ?? null,
+  };
+};
+
 export const assertOrganizationActive = async (
   organizationId: string,
 ): Promise<InstanceType<typeof Organization>> => {
@@ -324,6 +351,188 @@ export const normalizeQueuePriorities = async (
   }
 };
 
+/**
+ * Admin removes a queued (future) subscription before it ever activates.
+ * Futures carry no Usage rows, so only the queue positions need repacking.
+ */
+export const cancelQueuedSubscription = async (
+  organizationId: string,
+  subscriptionId: string,
+) => {
+  const sub = await Subscription.findOne({
+    _id: subscriptionId,
+    organization_id: toObjectId(organizationId),
+  });
+  if (!sub) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'QUEUED_SUBSCRIPTION_NOT_FOUND');
+  }
+  if (sub.status !== 'future') {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'ONLY_FUTURE_SUBSCRIPTIONS_CAN_BE_CANCELLED',
+    );
+  }
+  sub.status = 'cancelled';
+  sub.cancellation_reason = 'Cancelled from queue';
+  sub.queue_priority = 0;
+  await sub.save();
+  await normalizeQueuePriorities(organizationId);
+  return createResponse(httpStatus.OK, 'Queued subscription cancelled.', {
+    cancelledSubscription: sub._id,
+    futureQueue: await getOrganizationSubscriptionQueue(organizationId),
+  });
+};
+
+/**
+ * Drag-and-drop reorder among queued subscriptions. The submitted list must be an
+ * exact permutation of the current future ids, so a stale drag cannot silently drop
+ * or duplicate a queued plan.
+ */
+export const reorderSubscriptionQueue = async (
+  organizationId: string,
+  orderedSubscriptionIds: string[],
+) => {
+  const futures = await Subscription.find(futureQuery(organizationId)).sort({
+    queue_priority: 1,
+  });
+  const futureIds = new Set(futures.map((s) => String(s._id)));
+  const submitted = new Set(orderedSubscriptionIds);
+  const isExactMatch =
+    orderedSubscriptionIds.length === futures.length &&
+    orderedSubscriptionIds.length === submitted.size &&
+    [...futureIds].every((id) => submitted.has(id));
+  if (!isExactMatch) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'QUEUE_ORDER_MISMATCH');
+  }
+
+  const ops = orderedSubscriptionIds.map((id, index) => ({
+    updateOne: {
+      filter: { _id: id },
+      update: { $set: { queue_priority: index + 1 } },
+    },
+  }));
+  await Subscription.bulkWrite(ops);
+  // Cancelled/expired rows must not take part in the promotion sort.
+  await Subscription.updateMany(
+    {
+      organization_id: toObjectId(organizationId),
+      status: { $in: ['cancelled', 'expired'] },
+    },
+    { $set: { queue_priority: 0 } },
+  );
+  await normalizeQueuePriorities(organizationId);
+
+  return createResponse(httpStatus.OK, 'Future queue reordered successfully.', {
+    futureQueue: await getOrganizationSubscriptionQueue(organizationId),
+  });
+};
+
+/**
+ * SaaS-parity bulk limit adjustment, narrowed to ScanFlow's single metered
+ * feature ('scan'). Validates every adjustment first, then applies them all, so a
+ * rejected item cannot leave a partially adjusted quota.
+ *
+ * An active subscription adjusts its Usage row; a queued one adjusts the feature
+ * snapshot on the subscription so the new limit takes effect at promotion.
+ */
+export const adjustScanLimits = async (
+  organizationId: string,
+  subscriptionId: string,
+  adjustments: { delta: number }[],
+) => {
+  if (!adjustments?.length) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'At least one adjustment is required',
+    );
+  }
+  const sub = await Subscription.findOne({
+    _id: subscriptionId,
+    organization_id: toObjectId(organizationId),
+  });
+  if (!sub) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'SUBSCRIPTION_NOT_FOUND');
+  }
+  if (sub.status === 'cancelled') {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'LIMITS_CANNOT_BE_ADJUSTED_ON_CANCELLED',
+    );
+  }
+
+  const feature = (sub.features ?? []).find((f) => f.features_name === 'scan');
+  if (!feature) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'SCAN_FEATURE_NOT_ON_SUBSCRIPTION',
+    );
+  }
+
+  const totalDelta = adjustments.reduce((sum, a) => sum + Number(a.delta), 0);
+  if (!Number.isFinite(totalDelta) || totalDelta <= 0) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'ADJUSTMENT_DELTA_MUST_BE_POSITIVE',
+    );
+  }
+
+  if (sub.status === 'future') {
+    const newLimit = feature.scan_limit + totalDelta;
+    if (newLimit < 0) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'SCAN_LIMIT_WOULD_GO_NEGATIVE',
+      );
+    }
+    await Subscription.updateOne(
+      { _id: sub._id },
+      { $set: { 'features.$[feat].scan_limit': newLimit } },
+      { arrayFilters: [{ 'feat.features_name': 'scan' }] },
+    );
+    return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
+      subscription_id: sub._id,
+      scan_limit: newLimit,
+      status: sub.status,
+    });
+  }
+
+  const usage = await Usage.findOne({
+    organization_id: toObjectId(organizationId),
+    subscription_id: sub._id,
+  });
+  if (!usage) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'USAGE_RECORD_NOT_FOUND');
+  }
+  // The durable row lags the hot-path counter until a flush, so compare against
+  // the live value and report the same number back.
+  const cache = await readActiveSubUsage(organizationId, sub as any);
+  const used = cache?.used ?? usage.usage;
+  const newLimit = usage.scan_limit + totalDelta;
+  if (newLimit < 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'SCAN_LIMIT_WOULD_GO_NEGATIVE');
+  }
+  if (newLimit < used) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'SCAN_LIMIT_BELOW_USAGE');
+  }
+  await Usage.updateOne({ _id: usage._id }, { $set: { scan_limit: newLimit } });
+  // Keep the hot-path cache in step with the durable quota, preserving `used`.
+  if (sub.status === 'active') {
+    await writeActiveSubscriptionCache(
+      String(sub.organization_id),
+      newLimit,
+      sub.expires_at,
+      false,
+      used,
+    );
+  }
+  return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
+    subscription_id: sub._id,
+    scan_limit: newLimit,
+    usage: used,
+    status: sub.status,
+  });
+};
+
 export const normalizeAllQueuePriorities = async (): Promise<void> => {
   const orgIds = await Subscription.distinct('organization_id', {
     status: 'future',
@@ -435,8 +644,17 @@ export const renewSubscription = async (
   }
 
   if (mode === 'promote') {
-    const promoted = await promoteEarliestFutureSubscription(organizationId);
-    if (!promoted) {
+    // The current active must be retired first, otherwise promoting the queue head
+    // leaves the organization with two active subscriptions.
+    const cancelled = await cancelActiveSubscription(
+      organizationId,
+      'Replaced by queued subscription',
+    );
+    const { cancelledSubscription, promotedSubscription } = cancelled.data;
+    const next = promotedSubscription
+      ? await Subscription.findById(promotedSubscription)
+      : null;
+    if (!next) {
       throw new ApiError(
         httpStatus.NOT_FOUND,
         'No queued subscription to promote',
@@ -446,7 +664,9 @@ export const renewSubscription = async (
       httpStatus.OK,
       'Next queued subscription activated.',
       {
-        subscription: promoted,
+        cancelledSubscription,
+        subscription: next,
+        futureQueue: await getOrganizationSubscriptionQueue(organizationId),
       },
     );
   }
@@ -526,15 +746,36 @@ export const getSubscriptionSummary = async (
   const futureQueue = await Subscription.find(futureQuery(organizationId))
     .populate('plan_id')
     .sort({ queue_priority: 1 });
-  const usage = active
-    ? await Usage.findOne({
-        organization_id: toObjectId(organizationId),
-        subscription_id: active._id,
-      })
-    : null;
+
+  // Same shape as getOrganizationUsage so the panel has a single usage contract.
+  let usage: {
+    period_count: number;
+    scan_limit: number;
+    quota_period: 'month' | 'quarterly' | null;
+    subscription_expires_at: Date | null;
+  } = {
+    period_count: 0,
+    scan_limit: 0,
+    quota_period: null,
+    subscription_expires_at: null,
+  };
+  if (active) {
+    const row = await Usage.findOne({
+      organization_id: toObjectId(organizationId),
+      subscription_id: active._id,
+    });
+    const cache = await readActiveSubUsage(organizationId, active as any);
+    usage = {
+      period_count: cache?.used ?? row?.usage ?? 0,
+      scan_limit: scanLimitOf(active.features),
+      quota_period: active.billing_cycle,
+      subscription_expires_at: active.expires_at,
+    };
+  }
+
   return createResponse(httpStatus.OK, 'Subscription fetched successfully.', {
-    activeSubscription: active,
-    futureQueue,
+    activeSubscription: active ? toSubscriptionView(active) : null,
+    futureQueue: futureQueue.map((sub) => toSubscriptionView(sub)),
     usage,
   });
 };

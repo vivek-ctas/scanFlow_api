@@ -177,12 +177,51 @@ export const getOrganizationById = async (organizationId: string) => {
   return org;
 };
 
+/**
+ * Returns organization with admin user details for API responses.
+ * Does NOT return a Mongoose document - it's a plain object for serialization.
+ */
+export const getOrganizationWithAdmin = async (organizationId: string) => {
+  const org = await Organization.findById(organizationId);
+  if (!org || org.status === 2) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Organization not found');
+  }
+
+  const adminUser = await User.findOne({
+    organization_id: org._id,
+    role: 'ORGANIZATION_ADMIN',
+  }).select(
+    'first_name last_name business_address email contact_number country_name',
+  );
+
+  const orgObj = org.toObject() as Record<string, any>;
+  if (adminUser) {
+    orgObj.admin = {
+      first_name: adminUser.first_name,
+      last_name: adminUser.last_name,
+      business_address: adminUser.business_address,
+      email: adminUser.email,
+      contact_number: adminUser.contact_number,
+      country_name: adminUser.country_name,
+    };
+  }
+  return orgObj;
+};
+
 const ORG_UPDATE_KEYS = [
   'company_name',
   'email',
   'contact_number',
   'country_name',
   'status',
+];
+
+const ADMIN_USER_CASCADE_KEYS = [
+  'first_name',
+  'last_name',
+  'business_address',
+  'country_name',
+  'contact_number',
 ];
 
 export const updateOrganizationById = async (
@@ -203,7 +242,28 @@ export const updateOrganizationById = async (
   org.modified_by = modifiedBy ? toObjectId(modifiedBy) : null;
   await org.save();
 
-  if (normalized.company_name !== undefined) {
+  const adminSet: Record<string, any> = {};
+  ADMIN_USER_CASCADE_KEYS.forEach((key) => {
+    if (normalized[key] !== undefined) {
+      adminSet[key] = normalized[key];
+    }
+  });
+  if (Object.keys(adminSet).length) {
+    if (normalized.company_name !== undefined) {
+      adminSet.company_name = normalized.company_name;
+    }
+    const adminUpdate = await User.updateOne(
+      { organization_id: org._id, role: 'ORGANIZATION_ADMIN' },
+      { $set: adminSet },
+    );
+    if (!adminUpdate.matchedCount) {
+      ADMIN_USER_CASCADE_KEYS.forEach((key) => {
+        if (normalized[key] !== undefined) {
+          delete normalized[key];
+        }
+      });
+    }
+  } else if (normalized.company_name !== undefined) {
     await User.updateOne(
       { organization_id: org._id, role: 'ORGANIZATION_ADMIN' },
       { $set: { company_name: normalized.company_name } },

@@ -90,3 +90,37 @@ export const forceActivateSubscription = catchAsync(
     res.status(result.status).json(result);
   },
 );
+
+export const cancelQueuedSubscription = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const result = await subscriptionService.cancelQueuedSubscription(
+      organizationId,
+      req.body.subscription_id,
+    );
+    res.status(result.status).json(result);
+  },
+);
+
+export const reorderSubscriptionQueue = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const result = await subscriptionService.reorderSubscriptionQueue(
+      organizationId,
+      req.body.orderedSubscriptionIds,
+    );
+    res.status(result.status).json(result);
+  },
+);
+
+export const adjustScanLimits = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const result = await subscriptionService.adjustScanLimits(
+      organizationId,
+      req.body.subscription_id,
+      req.body.adjustments,
+    );
+    res.status(result.status).json(result);
+  },
+);

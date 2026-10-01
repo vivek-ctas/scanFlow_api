@@ -7,6 +7,9 @@ import {
   getOrganizationSubscriptionQueue,
   activateEligibleSubscriptions,
   cancelActiveSubscription,
+  cancelQueuedSubscription,
+  reorderSubscriptionQueue,
+  adjustScanLimits,
   forceActivateSubscription,
   renewSubscription,
   getSubscriptionSummary,
@@ -129,6 +132,13 @@ describe('subscription lifecycle (§3 + §8)', () => {
     await renewSubscription(String(org._id), 'promote');
     const promoted = await getActiveSubscription(String(org._id));
     expect(promoted?.plan_id).toBeDefined();
+    // promote must retire the previous active, never sit alongside it
+    const activesAfterPromote = await Subscription.find({
+      organization_id: new mongoose.Types.ObjectId(String(org._id)),
+      status: 'active',
+    });
+    expect(activesAfterPromote).toHaveLength(1);
+    expect(String(activesAfterPromote[0]._id)).toBe(String(promoted?._id));
 
     const another = await renewSubscription(String(org._id), 'continue');
     expect(another.status).toBe(200);
@@ -163,7 +173,7 @@ describe('subscription lifecycle (§3 + §8)', () => {
     expect(created.length).toBe(10);
   });
 
-  it('summary returns active subscription + usage row', async () => {
+  it('summary returns active subscription + normalized usage row', async () => {
     const org = await createOrg();
     const plan = await createPlan({ scan_limit: 5 });
     await grant(String(org._id), String(plan._id), { trialDays: 0 });
@@ -172,8 +182,12 @@ describe('subscription lifecycle (§3 + §8)', () => {
     const body: any = summary.data;
     expect(body.activeSubscription).toBeTruthy();
     expect(scanLimitOf(body.activeSubscription.features)).toBe(5);
-    expect(body.usage).toBeTruthy();
-    expect(body.usage.usage).toBe(0);
+    expect(body.usage).toEqual({
+      period_count: 0,
+      scan_limit: 5,
+      quota_period: 'month',
+      subscription_expires_at: body.activeSubscription.expires_at,
+    });
   });
 
   // Plan writes always store a quarterly amount, so this exercises the guard for
@@ -285,5 +299,155 @@ describe('subscription lifecycle (§3 + §8)', () => {
     expect(payment.billing_cycle).toBe('quarterly');
     expect(payment.price).toBe(600);
     expect(payment.organization_id.toString()).toBe(String(org._id));
+  });
+
+  it('cancel-queued removes only the targeted future and repacks the rest', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+    const planC = await createPlan({ name: 'C' });
+    await grant(String(org._id), String(planA._id));
+    const b = await grant(String(org._id), String(planB._id));
+    const c = await grant(String(org._id), String(planC._id));
+
+    const result = await cancelQueuedSubscription(String(org._id), String(b._id));
+    expect(result.status).toBe(200);
+
+    const queue = await getOrganizationSubscriptionQueue(String(org._id));
+    expect(queue.map((s) => String(s._id))).toEqual([String(c._id)]);
+    expect(queue[0].queue_priority).toBe(1);
+
+    const cancelled = await Subscription.findById(b._id);
+    expect(cancelled?.status).toBe('cancelled');
+    // The active subscription must be untouched.
+    const active = await getActiveSubscription(String(org._id));
+    expect(active?.status).toBe('active');
+  });
+
+  it('cancel-queued rejects a non-future subscription', async () => {
+    const org = await createOrg();
+    const plan = await createPlan();
+    const active = await grant(String(org._id), String(plan._id));
+    await expect(
+      cancelQueuedSubscription(String(org._id), String(active._id)),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'ONLY_FUTURE_SUBSCRIPTIONS_CAN_BE_CANCELLED',
+    });
+  });
+
+  it('reorder-queue applies the submitted order to queue_priority', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+    const planC = await createPlan({ name: 'C' });
+    await grant(String(org._id), String(planA._id));
+    const b = await grant(String(org._id), String(planB._id));
+    const c = await grant(String(org._id), String(planC._id));
+
+    await reorderSubscriptionQueue(String(org._id), [
+      String(c._id),
+      String(b._id),
+    ]);
+    const queue = await getOrganizationSubscriptionQueue(String(org._id));
+    expect(queue.map((s) => String(s._id))).toEqual([String(c._id), String(b._id)]);
+    expect(queue[0].queue_priority).toBe(1);
+    expect(queue[1].queue_priority).toBe(2);
+  });
+
+  it('reorder-queue rejects a partial or extra id list', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+    await grant(String(org._id), String(planA._id));
+    const b = await grant(String(org._id), String(planB._id));
+    const planC = await createPlan({ name: 'C' });
+    const c = await grant(String(org._id), String(planC._id));
+
+    // Missing one queued id.
+    await expect(
+      reorderSubscriptionQueue(String(org._id), [String(c._id)]),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'QUEUE_ORDER_MISMATCH',
+    });
+    // Includes an id that is not queued.
+    await expect(
+      reorderSubscriptionQueue(String(org._id), [
+        String(c._id),
+        String(b._id),
+        String(planA._id),
+      ]),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'QUEUE_ORDER_MISMATCH',
+    });
+  });
+
+  it('adjust-scan-limits raises the active quota and preserves used count', async () => {
+    const org = await createOrg();
+    const plan = await createPlan({ scan_limit: 10 });
+    await grant(String(org._id), String(plan._id), { trialDays: 0 });
+    expect((await reserveScanUsage(String(org._id))).status).toBe('ok');
+    expect((await reserveScanUsage(String(org._id))).status).toBe('ok');
+    expect(await activeUsed(String(org._id))).toBe(2);
+
+    const result = await adjustScanLimits(String(org._id), String(
+      (await getActiveSubscription(String(org._id)))!._id,
+    ), [{ delta: 5 }]);
+    expect(result.status).toBe(200);
+    expect(result.data.scan_limit).toBe(15);
+    expect(result.data.usage).toBe(2);
+    expect(await activeUsed(String(org._id))).toBe(2);
+  });
+
+  it('adjust-scan-limits refuses to drop the quota below used count', async () => {
+    const org = await createOrg();
+    const plan = await createPlan({ scan_limit: 5 });
+    await grant(String(org._id), String(plan._id), { trialDays: 0 });
+    expect((await reserveScanUsage(String(org._id))).status).toBe('ok');
+    expect(await activeUsed(String(org._id))).toBe(1);
+
+    const active = await getActiveSubscription(String(org._id));
+    await expect(
+      adjustScanLimits(String(org._id), String(active!._id), [{ delta: 1 }]),
+    ).resolves.toMatchObject({ status: 200 });
+    // Now 5 -> 6; a fresh adjustment cannot go below the already-used count.
+    await expect(
+      adjustScanLimits(String(org._id), String(active!._id), [{ delta: -5 }]),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('adjust-scan-limits updates the feature snapshot on a queued subscription', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B', scan_limit: 20 });
+    await grant(String(org._id), String(planA._id));
+    const queued = await grant(String(org._id), String(planB._id));
+
+    const result = await adjustScanLimits(String(org._id), String(queued._id), [
+      { delta: 30 },
+    ]);
+    expect(result.status).toBe(200);
+    expect(result.data.scan_limit).toBe(50);
+
+    const refreshed = await Subscription.findById(queued._id);
+    expect(scanLimitOf(refreshed?.features ?? [])).toBe(50);
+  });
+
+  it('adjust-scan-limits rejects a cancelled subscription', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+    await grant(String(org._id), String(planA._id));
+    const queued = await grant(String(org._id), String(planB._id));
+    await cancelQueuedSubscription(String(org._id), String(queued._id));
+
+    await expect(
+      adjustScanLimits(String(org._id), String(queued._id), [{ delta: 5 }]),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'LIMITS_CANNOT_BE_ADJUSTED_ON_CANCELLED',
+    });
   });
 });

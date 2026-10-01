@@ -178,4 +178,43 @@ describe('simple create-org contract (saas-style)', () => {
       String(legacy.body.data.organization.id),
     );
   });
+
+  it('update accepts admin-owned fields and cascades them to the org admin user', async () => {
+    const admin = await createAdminUser();
+    const tokens = await generateAuthTokens(admin as any);
+    const created = await request(app)
+      .post('/api/organizations')
+      .set('authorization', `Bearer ${tokens.access_token}`)
+      .send({
+        first_name: 'Riya',
+        last_name: 'Shah',
+        company_name: 'Acme Retail',
+        email: 'riya@acme.com',
+      });
+    expect(created.status).toBe(201);
+    const orgId = created.body.data.organization.id;
+    const adminUserId = created.body.data.admin.id;
+
+    const updated = await request(app)
+      .put(`/api/organizations/${orgId}`)
+      .set('authorization', `Bearer ${tokens.access_token}`)
+      .send({
+        company_name: 'Acme Retail Plus',
+        first_name: 'Riyaansh',
+        last_name: 'Saxena',
+        business_address: 'Pune, MH 411001',
+      });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body.data.organization.company_name).toBe('Acme Retail Plus');
+
+    const persistedAdmin: any = await User.findById(adminUserId);
+    expect(persistedAdmin?.first_name).toBe('Riyaansh');
+    expect(persistedAdmin?.last_name).toBe('Saxena');
+    expect(persistedAdmin?.business_address).toBe('Pune, MH 411001');
+    // company_name still cascades to both records.
+    expect(persistedAdmin?.company_name).toBe('Acme Retail Plus');
+    const orgRow: any = await Organization.findById(orgId);
+    expect(orgRow?.company_name).toBe('Acme Retail Plus');
+  });
 });
