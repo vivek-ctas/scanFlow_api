@@ -9,11 +9,12 @@ export const computeExpiresAt = (
   trialDays = 0,
   from: Date = new Date(),
 ): Date => {
+  const start = moment(from);
   if (trialDays > 0) {
-    return moment(from).add(trialDays, 'days').toDate();
+    start.add(trialDays, 'days');
   }
   if (billingCycle === 'quarterly') {
-    return moment(from).add(3, 'months').toDate();
+    return start.add(3, 'months').toDate();
   }
-  return moment(from).add(1, 'month').toDate();
+  return start.add(1, 'month').toDate();
 };

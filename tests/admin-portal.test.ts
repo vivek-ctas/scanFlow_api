@@ -155,18 +155,27 @@ describe('admin plans CRUD (§4)', () => {
     expect(dup.body.message).toMatch(/already exists/i);
   });
 
-  it('plan.billing_cycle drives price_quarterly derivation', async () => {
+  it('price_quarterly is always stored as a number, whatever the cycle', async () => {
     const admin = await createAdminUser();
     const token = await tokenFor(admin);
 
-    // Default cycle is monthly: quarterly pricing is cleared even if sent.
+    // Default cycle is monthly: the quarterly amount is still stored, and an
+    // explicit override is respected.
     const monthly = await request(app)
       .post('/api/plans')
       .set('authorization', `Bearer ${token}`)
       .send({ name: 'MonthlyOnly', price: 100, price_quarterly: 300 });
     expect(monthly.status).toBe(201);
     expect(monthly.body.data.plan.billing_cycle).toBe('month');
-    expect(monthly.body.data.plan.price_quarterly).toBeNull();
+    expect(monthly.body.data.plan.price_quarterly).toBe(300);
+
+    // Monthly plan with no override: derived as price*3.
+    const monthlyDerived = await request(app)
+      .post('/api/plans')
+      .set('authorization', `Bearer ${token}`)
+      .send({ name: 'MonthlyDerived', price: 100 });
+    expect(monthlyDerived.status).toBe(201);
+    expect(monthlyDerived.body.data.plan.price_quarterly).toBe(300);
 
     // Quarterly plan with no override: derived as price*3 minus discount.
     const quarterly = await request(app)
@@ -198,11 +207,12 @@ describe('admin plans CRUD (§4)', () => {
     expect(toQuarterly.body.data.plan.billing_cycle).toBe('quarterly');
     expect(toQuarterly.body.data.plan.price_quarterly).toBe(600);
 
+    // Flipping back to monthly keeps a real quarterly amount, it is never nulled.
     const backToMonthly = await request(app)
       .put(`/api/plans/${id}`)
       .set('authorization', `Bearer ${token}`)
       .send({ billing_cycle: 'month' });
-    expect(backToMonthly.body.data.plan.price_quarterly).toBeNull();
+    expect(backToMonthly.body.data.plan.price_quarterly).toBe(600);
   });
 
   it('rejects an unknown billing_cycle', async () => {

@@ -100,7 +100,7 @@ export const createCheckout = async ({
     const session = await createCheckoutSession({
       leadId: String(lead._id),
       amount: price,
-      currency,
+      currency: currency.toLowerCase(),
       successUrl: success_url,
       cancelUrl: cancel_url,
     });
@@ -151,4 +151,4 @@ export const createCheckout = async ({
 };
 
 const cartCurrency = (currency?: string): string =>
-  (currency || 'inr').toUpperCase();
+  (currency || 'usd').toUpperCase();

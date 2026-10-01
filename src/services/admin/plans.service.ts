@@ -143,8 +143,6 @@ export const updatePlanById = async (
     }
   });
 
-  // `price_quarterly` is derived, never taken verbatim: recompute it whenever the
-  // cycle flips or anything feeding the derivation changes.
   if (cycleChanged || priceChanged) {
     plan.price_quarterly = computeQuarterlyPrice(
       plan.billing_cycle,

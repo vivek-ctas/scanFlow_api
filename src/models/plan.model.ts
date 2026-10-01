@@ -35,14 +35,14 @@ const planSchema = new Schema<IPlan, IPlanModel>(
     name: { type: String, required: true, trim: true },
     desc: { type: String, trim: true },
     price: { type: Number, required: true, min: 0 },
-    price_quarterly: { type: Number, default: null, min: 0 },
+    price_quarterly: { type: Number, default: 0, min: 0 },
     /** Single cycle this plan is sold on. Subscriptions/payments snapshot it. */
     billing_cycle: {
       type: String,
       enum: ['month', 'quarterly'] as BillingCycle[],
       default: 'month',
     },
-    currency: { type: String, default: 'inr', trim: true, lowercase: true },
+    currency: { type: String, default: 'usd', trim: true, lowercase: true },
     trial_days: { type: Number, default: 0, min: 0 },
     features: {
       type: [

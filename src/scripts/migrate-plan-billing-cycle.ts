@@ -8,7 +8,11 @@
  * updateMany with the target `_id`s.
  *
  * `price_quarterly` is deliberately left untouched — it is now derived on every
- * plan write, and nulling it here would destroy pricing data.
+ * plan write, and nulling it here would destroy pricing data. Note that
+ * `price_quarterly` is always stored as a number now (derived as `price * 3` minus
+ * discount unless an explicit override is given); `billing_cycle` alone decides
+ * which of the two prices is charged. Plans predating this still carry a null
+ * quarterly amount and are backfilled manually, not by this script.
  *
  * Safe to re-run: only documents missing the field are touched.
  *

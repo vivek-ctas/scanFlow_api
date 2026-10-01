@@ -382,7 +382,7 @@ export const renewSubscription = async (
   if (mode === 'continue') {
     const newExpiry = computeExpiresAt(
       active.billing_cycle,
-      active.trial_days && active.trial_days > 0 ? active.trial_days : 0,
+      0,
       active.expires_at,
     );
     active.expires_at = newExpiry;

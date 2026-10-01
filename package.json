@@ -23,7 +23,8 @@
     "seed:super-admin": "tsx src/scripts/seed-super-admin.ts",
     "seed:demo": "tsx src/scripts/seed-demo-data.ts",
     "migrate:org-company-name": "tsx src/scripts/migrate-org-company-name.ts",
-    "migrate:plan-billing-cycle": "tsx src/scripts/migrate-plan-billing-cycle.ts"
+    "migrate:plan-billing-cycle": "tsx src/scripts/migrate-plan-billing-cycle.ts",
+    "migrate:plan-currency-usd": "tsx src/scripts/migrate-plan-currency-usd.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

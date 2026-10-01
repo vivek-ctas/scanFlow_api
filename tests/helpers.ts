@@ -66,10 +66,12 @@ export const createPlan = async (overrides: Record<string, any> = {}) => {
   const { scan_limit, ...rest } = overrides;
   const scanLimit = scan_limit ?? 100;
   const billingCycle = rest.billing_cycle ?? 'month';
+  const price = rest.price ?? 100;
   return Plan.create({
     name: 'Test Plan',
-    price: 100,
-    price_quarterly: null,
+    price,
+    // Quarterly amount is always numeric; `billing_cycle` decides what is charged.
+    price_quarterly: price * 3,
     billing_cycle: billingCycle,
     currency: 'INR',
     trial_days: 0,

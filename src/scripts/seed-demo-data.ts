@@ -23,7 +23,8 @@ interface PlanSeed {
   desc: string;
   billing_cycle: BillingCycle;
   price: number;
-  price_quarterly: number | null;
+  /** Always stored as a number, even for monthly-sold plans. */
+  price_quarterly: number;
   currency: string;
   trial_days: number;
   scan_limit: number;
@@ -37,9 +38,9 @@ const PLAN_SEED: PlanSeed[] = [
     name: 'Starter',
     desc: 'For small shops getting started with scan capture.',
     billing_cycle: 'month',
-    price: 1499,
-    price_quarterly: 3999,
-    currency: 'inr',
+    price: 29,
+    price_quarterly: 79,
+    currency: 'usd',
     trial_days: 14,
     scan_limit: 500,
     marketing_features: [
@@ -55,9 +56,9 @@ const PLAN_SEED: PlanSeed[] = [
     name: 'Growth',
     desc: 'For growing retail teams with steady scan volume.',
     billing_cycle: 'month',
-    price: 2999,
-    price_quarterly: 7999,
-    currency: 'inr',
+    price: 79,
+    price_quarterly: 199,
+    currency: 'usd',
     trial_days: 14,
     scan_limit: 2000,
     marketing_features: [
@@ -73,9 +74,9 @@ const PLAN_SEED: PlanSeed[] = [
     name: 'Pro',
     desc: 'For multi-branch businesses with heavy scan usage.',
     billing_cycle: 'quarterly',
-    price: 5999,
-    price_quarterly: 15999,
-    currency: 'inr',
+    price: 99,
+    price_quarterly: 249,
+    currency: 'usd',
     trial_days: 0,
     scan_limit: 10000,
     marketing_features: [
@@ -91,9 +92,9 @@ const PLAN_SEED: PlanSeed[] = [
     name: 'Enterprise',
     desc: 'Custom volume and SLA-backed support.',
     billing_cycle: 'month',
-    price: 14999,
-    price_quarterly: 39999,
-    currency: 'inr',
+    price: 299,
+    price_quarterly: 799,
+    currency: 'usd',
     trial_days: 0,
     scan_limit: 50000,
     marketing_features: [

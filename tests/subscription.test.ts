@@ -176,7 +176,9 @@ describe('subscription lifecycle (§3 + §8)', () => {
     expect(body.usage.usage).toBe(0);
   });
 
-  it('quarterly grant without price_quarterly is rejected (400)', async () => {
+  // Plan writes always store a quarterly amount, so this exercises the guard for
+  // legacy/malformed rows that predate that invariant.
+  it('quarterly grant on a plan missing price_quarterly is rejected (400)', async () => {
     const org = await createOrg();
     const plan = await createPlan({
       price: 100,
@@ -223,6 +225,41 @@ describe('subscription lifecycle (§3 + §8)', () => {
     const sub = await grant(String(org._id), String(plan._id));
     expect(sub.billing_cycle).toBe('quarterly');
     expect(sub.plan_price).toBe(250);
+  });
+
+  it('trial extends the paid period instead of replacing it', async () => {
+    const org = await createOrg();
+    const plan = await createPlan({
+      price: 100,
+      price_quarterly: 300,
+      billing_cycle: 'quarterly',
+    });
+    const sub = await grant(String(org._id), String(plan._id), {
+      trialDays: 14,
+      billingCycle: 'quarterly',
+    });
+    // 14 trial days + 3 monthly billing months, not 14 days total.
+    const spanDays =
+      (sub.expires_at.getTime() - sub.started_at.getTime()) / 86_400_000;
+    expect(spanDays).toBeGreaterThan(90);
+    expect(spanDays).toBeLessThan(110);
+  });
+
+  it('renew does not re-apply the trial on an already-trialed subscription', async () => {
+    const org = await createOrg();
+    const plan = await createPlan({ price: 100 });
+    const sub = await grant(String(org._id), String(plan._id), {
+      trialDays: 14,
+    });
+    const before = sub.expires_at.getTime();
+    const res = await renewSubscription(String(org._id), 'continue');
+    const after = new Date(
+      (res as any).data.activeSubscription.expires_at,
+    ).getTime();
+    // A renewal adds exactly one billing month to the existing expiry.
+    const addedDays = (after - before) / 86_400_000;
+    expect(addedDays).toBeGreaterThan(27);
+    expect(addedDays).toBeLessThan(32);
   });
 
   it('manual grant creates a TXN_SUCCESS payment and links it', async () => {

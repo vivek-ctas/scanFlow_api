@@ -21,7 +21,7 @@ export const createPlan = {
     price: Joi.number().min(0).required(),
     price_quarterly: Joi.number().min(0).allow(null).optional(),
     billing_cycle: billingCycle.optional().default('month'),
-    currency: Joi.string().trim().lowercase().optional().default('inr'),
+    currency: Joi.string().trim().lowercase().optional().default('usd'),
     trial_days: Joi.number().integer().min(0).optional().default(0),
     features: Joi.array().items(featureObject).optional().default([]),
     marketing_features: Joi.array().items(Joi.string()).optional().default([]),

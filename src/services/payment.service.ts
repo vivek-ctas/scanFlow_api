@@ -122,8 +122,6 @@ export const processGatewaySuccess = async ({
     payment.invoice_number = `INV-${String(payment._id).slice(-8)}`;
     await payment.save();
 
-    await payment.save();
-
     await sendPaymentSuccessEmail(lead.email, {
       firstName: lead.first_name,
       organizationName: organization.company_name,

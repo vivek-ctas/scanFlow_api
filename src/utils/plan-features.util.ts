@@ -27,18 +27,17 @@ export const scanLimitOf = (features: PlanFeatureEntry[] = []): number =>
   features.find((f) => f.features_name === 'scan')?.scan_limit ?? 0;
 
 /**
- * Quarterly price for a plan.
- * Uses the explicit override when one is supplied, otherwise derives it from the
- * monthly base price minus `discount` percent. A plan sold monthly is never
- * quarterly, so it gets `null` regardless of `price`.
+ * Quarterly price for a plan. Always numeric: uses the explicit override when one
+ * is supplied, otherwise derives it from the monthly base price minus `discount`
+ * percent. `billing_cycle` (not this value) decides which price is charged, so a
+ * monthly plan still carries a real quarterly amount.
  */
 export const computeQuarterlyPrice = (
   billingCycle: BillingCycle,
   price: number,
   discountPercent = 0,
   quarterlyOverride?: number | null,
-): number | null => {
-  if (billingCycle !== 'quarterly') return null;
+): number => {
   if (
     quarterlyOverride !== undefined &&
     quarterlyOverride !== null &&
