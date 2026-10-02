@@ -9,6 +9,8 @@ const subscriptionParams = {
 
 const billingCycle = Joi.string().valid('month', 'quarterly');
 
+const startDate = Joi.date().optional().allow('', null);
+
 export const getSubscription = {
   ...subscriptionParams,
 };
@@ -24,6 +26,7 @@ export const assignPlan = {
       plan_id: Joi.string().custom(objectId).required(),
       // Optional: defaults to the plan's own billing_cycle. Must match when sent.
       billing_cycle: billingCycle.optional(),
+      start_date: startDate,
     })
     .min(1),
 };
@@ -98,6 +101,7 @@ export const forceActivateSubscription = {
     .keys({
       plan_id: Joi.string().custom(objectId).required(),
       billing_cycle: billingCycle.optional(),
+      start_date: startDate,
       trial_days: Joi.number().integer().min(0).optional().default(0),
     })
     .min(1),

@@ -2,6 +2,15 @@ import httpStatus from 'http-status';
 import { Country } from '../models/country.model.js';
 import { createResponse, escapeRegExp } from './common.service.js';
 
+export const getCountryAliasesByCode = async () => {
+  const countries = await Country.find().select('country_code aliases').lean();
+  const byCode: Record<string, string[]> = {};
+  for (const country of countries) {
+    byCode[String(country.country_code).toUpperCase()] = country.aliases ?? [];
+  }
+  return byCode;
+};
+
 export const listCountries = async (
   filter: Record<string, any>,
   options: Record<string, any>,

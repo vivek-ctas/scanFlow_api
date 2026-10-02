@@ -20,6 +20,7 @@ export const createOrganization = {
       status: Joi.number().integer().valid(0, 1).optional().default(1),
       plan_id: Joi.string().custom(objectId).optional(),
       billing_cycle: Joi.string().valid('month', 'quarterly').optional(),
+      start_date: Joi.date().optional().allow('', null),
     }),
     Joi.object().keys({
       name: Joi.string().optional(),

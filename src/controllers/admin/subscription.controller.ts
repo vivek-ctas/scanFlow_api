@@ -36,7 +36,11 @@ export const assignPlan = catchAsync(async (req: Request, res: Response) => {
   const sub = await subscriptionService.grantSubscription(
     organizationId,
     req.body.plan_id,
-    { trialDays: 0, billingCycle: req.body.billing_cycle },
+    {
+      trialDays: 0,
+      billingCycle: req.body.billing_cycle,
+      startDate: req.body.start_date ?? null,
+    },
   );
   res.status(httpStatus.CREATED).json(
     createResponse(httpStatus.CREATED, 'Plan assigned successfully.', {
@@ -85,6 +89,7 @@ export const forceActivateSubscription = catchAsync(
       {
         trialDays: req.body.trial_days ?? 0,
         billingCycle: req.body.billing_cycle,
+        startDate: req.body.start_date ?? null,
       },
     );
     res.status(result.status).json(result);

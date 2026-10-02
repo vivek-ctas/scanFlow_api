@@ -13,6 +13,23 @@ import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
 
 const OPERATOR_ROLES = ORGANIZATION_ASSIGNABLE_ROLES;
 
+const buildOperatorScope = (
+  reqUser: any,
+  explicitOrgId?: any,
+): Record<string, any> => {
+  const scope: Record<string, any> = {
+    is_super_admin: { $ne: true },
+    role: { $in: OPERATOR_ROLES },
+  };
+  const orgScope = resolveOrganizationScope(reqUser, explicitOrgId);
+  if (orgScope) {
+    scope.organization_id = orgScope;
+  } else {
+    scope.organization_id = { $ne: null };
+  }
+  return scope;
+};
+
 export const createOperator = async (
   userBody: Record<string, any>,
   reqUser: any,
@@ -58,11 +75,10 @@ export const listOperators = async (
   options: Record<string, any>,
   reqUser: any,
 ) => {
-  const orgScope = resolveOrganizationScope(reqUser, filter.organization_id);
-  const query: Record<string, any> = {};
-  if (orgScope) {
-    query.organization_id = orgScope;
-  }
+  const query: Record<string, any> = buildOperatorScope(
+    reqUser,
+    filter.organization_id,
+  );
   if (filter.status !== undefined) {
     query.status = Number(filter.status);
   } else {
@@ -99,14 +115,11 @@ export const getOperatorById = async (
   reqUser: any,
   orgOverride?: string,
 ) => {
-  const orgScope = resolveOrganizationScope(reqUser, orgOverride);
   const query: Record<string, any> = {
+    ...buildOperatorScope(reqUser, orgOverride),
     _id: toObjectId(operatorId),
     status: { $ne: 2 },
   };
-  if (orgScope) {
-    query.organization_id = orgScope;
-  }
   const user = await User.findOne(query);
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Operator not found');

@@ -355,6 +355,158 @@ describe('subscription lifecycle (§3 + §8)', () => {
     expect(queue[1].queue_priority).toBe(2);
   });
 
+  it('chains a newly queued subscription off the queue tail, not the active one', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+    const planC = await createPlan({ name: 'C' });
+
+    const active = await grant(String(org._id), String(planA._id));
+    const first = await grant(String(org._id), String(planB._id));
+    const second = await grant(String(org._id), String(planC._id));
+
+    // The first future row starts when the active one ends.
+    expect(first.started_at!.getTime()).toBe(active.expires_at!.getTime());
+    // The second must start after the first ends. Chaining off the active expiry
+    // instead would place both future rows at the same start.
+    expect(second.started_at!.getTime()).toBe(first.expires_at!.getTime());
+    expect(second.started_at!.getTime()).toBeGreaterThan(
+      active.expires_at!.getTime(),
+    );
+  });
+
+  it('reorder-queue rewrites the schedule so dates follow the new order', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+    const planC = await createPlan({ name: 'C' });
+
+    const active = await grant(String(org._id), String(planA._id));
+    const b = await grant(String(org._id), String(planB._id));
+    const c = await grant(String(org._id), String(planC._id));
+
+    await reorderSubscriptionQueue(String(org._id), [
+      String(c._id),
+      String(b._id),
+    ]);
+
+    const queue = await getOrganizationSubscriptionQueue(String(org._id));
+    const [head, tail] = queue;
+    // Head now starts where the active subscription ends.
+    expect(head.started_at!.getTime()).toBe(active.expires_at!.getTime());
+    // Tail starts where the head ends, with no gap or overlap.
+    expect(tail.started_at!.getTime()).toBe(head.expires_at!.getTime());
+    // The reorder moved c ahead of b, so b's own dates must have changed.
+    const reloadedB = await Subscription.findById(b._id);
+    expect(reloadedB?.started_at!.getTime()).toBe(head.expires_at!.getTime());
+    // Every queued row keeps its own plan and cycle.
+    expect(String(reloadedB?.plan_id)).toBe(String(planB._id));
+    expect(reloadedB?.billing_cycle).toBe('month');
+  });
+
+  it('reorder-queue preserves each queued plan own billing cycle', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({
+      name: 'B',
+      billing_cycle: 'quarterly',
+      price_quarterly: 300,
+    });
+    const planC = await createPlan({ name: 'C' });
+
+    await grant(String(org._id), String(planA._id));
+    const b = await grant(String(org._id), String(planB._id));
+    const c = await grant(String(org._id), String(planC._id));
+
+    await reorderSubscriptionQueue(String(org._id), [
+      String(b._id),
+      String(c._id),
+    ]);
+
+    const reloadedB = await Subscription.findById(b._id);
+    const reloadedC = await Subscription.findById(c._id);
+    expect(reloadedB?.billing_cycle).toBe('quarterly');
+    expect(reloadedC?.billing_cycle).toBe('month');
+    // A quarterly row spans three months, a monthly row one.
+    const bDays = Math.round(
+      (reloadedB!.expires_at!.getTime() - reloadedB!.started_at!.getTime()) /
+        86_400_000,
+    );
+    const cDays = Math.round(
+      (reloadedC!.expires_at!.getTime() - reloadedC!.started_at!.getTime()) /
+        86_400_000,
+    );
+    expect(bDays).toBeGreaterThan(cDays);
+  });
+
+  it('promote with an empty queue fails without retiring the active subscription', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const active = await grant(String(org._id), String(planA._id));
+
+    await expect(
+      renewSubscription(String(org._id), 'promote'),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'No queued subscription to promote',
+    });
+
+    // The customer must still hold the plan they had.
+    const stillActive = await getActiveSubscription(String(org._id));
+    expect(stillActive).not.toBeNull();
+    expect(String(stillActive!._id)).toBe(String(active._id));
+    expect(stillActive?.status).toBe('active');
+  });
+
+  it('ignores start_date when the new plan is queued behind the active one', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+
+    const active = await grant(String(org._id), String(planA._id));
+    // A far-future date must not pull the queued row forward; it chains off the
+    // active subscription instead (SaaS assign-plan semantics).
+    const queued = await grant(String(org._id), String(planB._id), {
+      startDate: '2035-01-01',
+    });
+
+    expect(queued.status).toBe('future');
+    expect(queued.started_at!.getTime()).toBe(active.expires_at!.getTime());
+  });
+
+  it('start_date drives started_at and expires_at on a force-activated plan', async () => {
+    const org = await createOrg();
+    const plan = await createPlan({ name: 'A' });
+    const sub = await grant(String(org._id), String(plan._id), {
+      forceActive: true,
+      startDate: '2031-06-01',
+    });
+
+    expect(sub.status).toBe('active');
+    expect(sub.started_at!.toISOString().slice(0, 10)).toBe('2031-06-01');
+    expect(sub.expires_at!.toISOString().slice(0, 10)).toBe('2031-07-01');
+  });
+
+  it('force-activate applies the start_date sent by the admin endpoint', async () => {
+    const org = await createOrg();
+    const planA = await createPlan({ name: 'A' });
+    const planB = await createPlan({ name: 'B' });
+
+    await grant(String(org._id), String(planA._id));
+    const result = await forceActivateSubscription(
+      String(org._id),
+      String(planB._id),
+      { trialDays: 0, startDate: '2032-03-15' },
+    );
+    const forced = (result as any).data.subscription;
+
+    expect(forced.status).toBe('active');
+    expect(forced.started_at.toISOString().slice(0, 10)).toBe('2032-03-15');
+    expect(forced.expires_at.toISOString().slice(0, 10)).toBe('2032-04-15');
+    const active = await getActiveSubscription(String(org._id));
+    expect(String(active?._id)).toBe(String(forced._id));
+  });
+
   it('reorder-queue rejects a partial or extra id list', async () => {
     const org = await createOrg();
     const planA = await createPlan({ name: 'A' });

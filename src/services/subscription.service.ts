@@ -192,19 +192,26 @@ const decideInitialStatus = async (
   billingCycle: 'month' | 'quarterly',
   trialDays: number,
   forceActive: boolean,
+  startDate?: Date | string | null,
 ): Promise<{
   status: SubscriptionStatus;
   queuePriority: number;
   startedAt: Date;
   expiresAt: Date;
 }> => {
+  const resolveStartDate = (): Date => {
+    if (!startDate) return new Date();
+    const parsed = new Date(startDate);
+    return isNaN(parsed.getTime()) ? new Date() : parsed;
+  };
+
   if (forceActive) {
-    const now = new Date();
+    const startedAt = resolveStartDate();
     return {
       status: 'active',
       queuePriority: 0,
-      startedAt: now,
-      expiresAt: computeExpiresAt(billingCycle, trialDays, now),
+      startedAt,
+      expiresAt: computeExpiresAt(billingCycle, trialDays, startedAt),
     };
   }
   const active = await Subscription.findOne(
@@ -214,15 +221,17 @@ const decideInitialStatus = async (
     queue_priority: 1,
   });
   if (!active && futures.length === 0) {
-    const now = new Date();
+    const startedAt = resolveStartDate();
     return {
       status: 'active',
       queuePriority: 0,
-      startedAt: now,
-      expiresAt: computeExpiresAt(billingCycle, trialDays, now),
+      startedAt,
+      expiresAt: computeExpiresAt(billingCycle, trialDays, startedAt),
     };
   }
-  const chainSource = active ?? futures[futures.length - 1];
+  const chainSource = futures.length
+    ? futures[futures.length - 1]
+    : (active ?? null);
   const startedAt = chainSource ? chainSource.expires_at : new Date();
   return {
     status: 'future',
@@ -246,6 +255,7 @@ export const grantSubscription = async (
     forceActive?: boolean;
     billingCycle?: 'month' | 'quarterly';
     paymentId?: string;
+    startDate?: Date | string | null;
   } = {},
 ): Promise<ISubscription> => {
   const plan = await Plan.findById(planId);
@@ -272,6 +282,7 @@ export const grantSubscription = async (
     billingCycle,
     trialDays,
     Boolean(options.forceActive),
+    options.startDate ?? null,
   );
 
   const orgId = toObjectId(organizationId);
@@ -384,9 +395,40 @@ export const cancelQueuedSubscription = async (
 };
 
 /**
+ * Rewrites the schedule of every queued subscription so it reflects the current
+ * queue order. The first future row starts when the active subscription expires
+ * (or now when there is no active one); each following row starts when the
+ * previous one ends. Each row keeps its own cycle and trial allowance, so a
+ * reordering never changes what a customer is entitled to, only when it starts.
+ */
+export const recalculateQueueSchedule = async (organizationId: string) => {
+  const [active, futures] = await Promise.all([
+    Subscription.findOne(activeSubQuery(organizationId)).sort({
+      created_at: -1,
+    }),
+    Subscription.find(futureQuery(organizationId)).sort({ queue_priority: 1 }),
+  ]);
+  if (!futures.length) return;
+
+  let cursor = active?.expires_at ?? new Date();
+  for (const sub of futures) {
+    const startedAt = cursor;
+    cursor = computeExpiresAt(
+      sub.billing_cycle,
+      sub.trial_days ?? 0,
+      startedAt,
+    );
+    sub.started_at = startedAt;
+    sub.expires_at = cursor;
+    await sub.save();
+  }
+};
+
+/**
  * Drag-and-drop reorder among queued subscriptions. The submitted list must be an
  * exact permutation of the current future ids, so a stale drag cannot silently drop
- * or duplicate a queued plan.
+ * or duplicate a queued plan. Priorities are repacked and the schedule is then
+ * recalculated so the dates follow the new order.
  */
 export const reorderSubscriptionQueue = async (
   organizationId: string,
@@ -421,6 +463,7 @@ export const reorderSubscriptionQueue = async (
     { $set: { queue_priority: 0 } },
   );
   await normalizeQueuePriorities(organizationId);
+  await recalculateQueueSchedule(organizationId);
 
   return createResponse(httpStatus.OK, 'Future queue reordered successfully.', {
     futureQueue: await getOrganizationSubscriptionQueue(organizationId),
@@ -644,6 +687,16 @@ export const renewSubscription = async (
   }
 
   if (mode === 'promote') {
+    const queuedHead = await Subscription.findOne(futureQuery(organizationId))
+      .sort({ queue_priority: 1 })
+      .select('_id');
+    if (!queuedHead) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'No queued subscription to promote',
+      );
+    }
+
     // The current active must be retired first, otherwise promoting the queue head
     // leaves the organization with two active subscriptions.
     const cancelled = await cancelActiveSubscription(
@@ -715,7 +768,11 @@ export const cancelActiveSubscription = async (
 export const forceActivateSubscription = async (
   organizationId: string,
   planId: string,
-  options: { trialDays?: number; billingCycle?: 'month' | 'quarterly' } = {},
+  options: {
+    trialDays?: number;
+    billingCycle?: 'month' | 'quarterly';
+    startDate?: Date | string | null;
+  } = {},
 ) => {
   const existingActive = await getActiveSubscription(organizationId);
   if (existingActive) {
@@ -730,6 +787,7 @@ export const forceActivateSubscription = async (
     trialDays: options.trialDays ?? 0,
     forceActive: true,
     billingCycle: options.billingCycle,
+    startDate: options.startDate ?? null,
   });
   await normalizeQueuePriorities(organizationId);
   return createResponse(httpStatus.OK, 'Subscription force-activated.', {

@@ -16,6 +16,7 @@ import {
   toObjectId,
 } from '../common.service.js';
 import { grantSubscription } from '../subscription.service.js';
+import { resolveCountryName } from '../country-resolver.service.js';
 
 export const createOrganization = async (
   orgBody: Record<string, any>,
@@ -23,6 +24,9 @@ export const createOrganization = async (
 ) => {
   const isLegacy = orgBody.admin_email !== undefined;
 
+  const canonicalCountry = await resolveCountryName(
+    isLegacy ? orgBody.admin_country_name : orgBody.country_name,
+  );
   const adminFields = isLegacy
     ? {
         first_name: orgBody.admin_first_name || 'Organization',
@@ -30,7 +34,7 @@ export const createOrganization = async (
         email: normalizeEmail(orgBody.admin_email),
         contact_number: orgBody.admin_contact_no,
         company_name: orgBody.admin_company_name,
-        country_name: orgBody.admin_country_name,
+        country_name: canonicalCountry,
         business_address: orgBody.admin_business_address,
       }
     : {
@@ -39,7 +43,7 @@ export const createOrganization = async (
         email: normalizeEmail(orgBody.email),
         contact_number: orgBody.contact_number,
         company_name: orgBody.company_name,
-        country_name: orgBody.country_name,
+        country_name: canonicalCountry,
         business_address: orgBody.business_address,
       };
 
@@ -73,7 +77,7 @@ export const createOrganization = async (
     company_name: orgBody.company_name ?? orgBody.name,
     email: orgBody.email,
     contact_number: orgBody.contact_number,
-    country_name: orgBody.country_name,
+    country_name: canonicalCountry,
     status: orgBody.status ?? 1,
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
@@ -93,7 +97,10 @@ export const createOrganization = async (
     data.subscription = await grantSubscription(
       String(org._id),
       String(orgBody.plan_id),
-      { billingCycle: orgBody.billing_cycle },
+      {
+        billingCycle: orgBody.billing_cycle,
+        startDate: orgBody.start_date ?? null,
+      },
     );
   }
 
@@ -234,6 +241,15 @@ export const updateOrganizationById = async (
   if (normalized.company_name === undefined && normalized.name !== undefined) {
     normalized.company_name = normalized.name;
   }
+  if (normalized.country_name !== undefined) {
+    if (!normalized.country_name?.trim()) {
+      normalized.country_name = '';
+    } else {
+      const canonical = await resolveCountryName(normalized.country_name);
+      if (canonical) normalized.country_name = canonical;
+      else delete normalized.country_name;
+    }
+  }
   ORG_UPDATE_KEYS.forEach((key) => {
     if (normalized[key] !== undefined) {
       (org as any)[key] = normalized[key];
@@ -252,6 +268,11 @@ export const updateOrganizationById = async (
     if (normalized.company_name !== undefined) {
       adminSet.company_name = normalized.company_name;
     }
+    ORG_UPDATE_KEYS.forEach((key) => {
+      if (adminSet[key] !== undefined && (org as any)[key] !== undefined) {
+        adminSet[key] = (org as any)[key];
+      }
+    });
     const adminUpdate = await User.updateOne(
       { organization_id: org._id, role: 'ORGANIZATION_ADMIN' },
       { $set: adminSet },

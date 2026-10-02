@@ -11,6 +11,7 @@ import {
   Scan,
   WebhookConfig,
   WebhookDelivery,
+  Country,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -40,6 +41,7 @@ const MODELS = [
   Scan,
   WebhookConfig,
   WebhookDelivery,
+  Country,
 ];
 
 export const clearDb = async (): Promise<void> => {
@@ -84,6 +86,19 @@ export const createPlan = async (overrides: Record<string, any> = {}) => {
     ...rest,
   });
 };
+
+/**
+ * Country rows are the source of truth the organization write path resolves
+ * against, so any test that sends `country_name` needs one seeded.
+ */
+export const createCountry = async (overrides: Record<string, any> = {}) =>
+  Country.create({
+    country_code: 'IND',
+    country_name: 'India',
+    currency_code: 'INR',
+    aliases: [],
+    ...overrides,
+  });
 
 export interface TestUserDoc {
   id: string;
