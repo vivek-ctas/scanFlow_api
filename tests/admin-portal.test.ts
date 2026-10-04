@@ -17,7 +17,7 @@ const tokenFor = async (user: any) => {
 
 const seedGuestLeads = async () => {
   const plan = await createPlan({ name: 'Starter', price: 99 });
-  const o2 = await Organization.create({ name: 'Org 2', status: 1 });
+  const o2 = await Organization.create({ company_name: 'Org 2', status: 1 });
   const leads = [
     {
       first_name: 'Alice',
@@ -153,6 +153,76 @@ describe('admin plans CRUD (§4)', () => {
       .send({ name: 'pro', price: 1 });
     expect(dup.status).toBe(400);
     expect(dup.body.message).toMatch(/already exists/i);
+  });
+
+  it('price_quarterly is always stored as a number, whatever the cycle', async () => {
+    const admin = await createAdminUser();
+    const token = await tokenFor(admin);
+
+    // Default cycle is monthly: the quarterly amount is still stored, and an
+    // explicit override is respected.
+    const monthly = await request(app)
+      .post('/api/plans')
+      .set('authorization', `Bearer ${token}`)
+      .send({ name: 'MonthlyOnly', price: 100, price_quarterly: 300 });
+    expect(monthly.status).toBe(201);
+    expect(monthly.body.data.plan.billing_cycle).toBe('month');
+    expect(monthly.body.data.plan.price_quarterly).toBe(300);
+
+    // Monthly plan with no override: derived as price*3.
+    const monthlyDerived = await request(app)
+      .post('/api/plans')
+      .set('authorization', `Bearer ${token}`)
+      .send({ name: 'MonthlyDerived', price: 100 });
+    expect(monthlyDerived.status).toBe(201);
+    expect(monthlyDerived.body.data.plan.price_quarterly).toBe(300);
+
+    // Quarterly plan with no override: derived as price*3 minus discount.
+    const quarterly = await request(app)
+      .post('/api/plans')
+      .set('authorization', `Bearer ${token}`)
+      .send({ name: 'Derived', price: 100, billing_cycle: 'quarterly', discount: 10 });
+    expect(quarterly.status).toBe(201);
+    expect(quarterly.body.data.plan.price_quarterly).toBe(270);
+
+    // Explicit override wins over the derivation.
+    const overridden = await request(app)
+      .post('/api/plans')
+      .set('authorization', `Bearer ${token}`)
+      .send({ name: 'Override', price: 100, billing_cycle: 'quarterly', price_quarterly: 250 });
+    expect(overridden.body.data.plan.price_quarterly).toBe(250);
+  });
+
+  it('flipping billing_cycle recomputes price_quarterly on update', async () => {
+    const admin = await createAdminUser();
+    const token = await tokenFor(admin);
+    const plan = await createPlan({ name: 'Flippable', price: 200, price_quarterly: null });
+    const id = String(plan._id);
+
+    const toQuarterly = await request(app)
+      .put(`/api/plans/${id}`)
+      .set('authorization', `Bearer ${token}`)
+      .send({ billing_cycle: 'quarterly' });
+    expect(toQuarterly.status).toBe(200);
+    expect(toQuarterly.body.data.plan.billing_cycle).toBe('quarterly');
+    expect(toQuarterly.body.data.plan.price_quarterly).toBe(600);
+
+    // Flipping back to monthly keeps a real quarterly amount, it is never nulled.
+    const backToMonthly = await request(app)
+      .put(`/api/plans/${id}`)
+      .set('authorization', `Bearer ${token}`)
+      .send({ billing_cycle: 'month' });
+    expect(backToMonthly.body.data.plan.price_quarterly).toBe(600);
+  });
+
+  it('rejects an unknown billing_cycle', async () => {
+    const admin = await createAdminUser();
+    const token = await tokenFor(admin);
+    const res = await request(app)
+      .post('/api/plans')
+      .set('authorization', `Bearer ${token}`)
+      .send({ name: 'BadCycle', price: 100, billing_cycle: 'yearly' });
+    expect(res.status).toBe(400);
   });
 
   it('PUT update, PATCH update-status, DELETE soft-delete', async () => {

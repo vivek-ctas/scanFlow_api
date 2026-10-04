@@ -75,14 +75,13 @@ export const processGatewaySuccess = async ({
       try {
         const created = await createOrganization(
           {
-            name: lead.company_name || 'ScanFlow Organization',
+            first_name: lead.first_name,
+            last_name: lead.last_name,
+            company_name: lead.company_name || 'ScanFlow Organization',
             email: lead.email,
             contact_number: lead.contact_number,
+            country_name: lead.country_name,
             status: 1,
-            admin_email: lead.email,
-            admin_first_name: lead.first_name,
-            admin_last_name: lead.last_name,
-            admin_contact_no: lead.contact_number,
           },
           undefined,
         );
@@ -109,7 +108,8 @@ export const processGatewaySuccess = async ({
       String(payment.plan_id),
       {
         trialDays: lead.trial_days,
-        billingCycle: payment.billing_cycle,
+        // The lead carries the cycle that was quoted at checkout.
+        billingCycle: lead.billing_cycle ?? payment.billing_cycle,
         paymentId: String(payment._id),
       },
     );
@@ -122,11 +122,9 @@ export const processGatewaySuccess = async ({
     payment.invoice_number = `INV-${String(payment._id).slice(-8)}`;
     await payment.save();
 
-    await payment.save();
-
     await sendPaymentSuccessEmail(lead.email, {
       firstName: lead.first_name,
-      organizationName: organization.name,
+      organizationName: organization.company_name,
       planName: `Plan (${subscription.billing_cycle})`,
       amount,
       currency,

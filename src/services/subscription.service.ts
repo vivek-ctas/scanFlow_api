@@ -1,7 +1,7 @@
 import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import { Organization } from '../models/organization.model.js';
-import { Plan, IPlan } from '../models/plan.model.js';
+import { Plan } from '../models/plan.model.js';
 import {
   Subscription,
   ISubscription,
@@ -16,7 +16,11 @@ import {
   computeExpiresAt,
   USAGE_RETENTION_DAYS,
 } from '../utils/subscription-expiry.util.js';
-import { scanLimitOf, priceForCycle } from '../utils/plan-features.util.js';
+import {
+  planPriceErrorMessage,
+  resolvePlanPrice,
+  scanLimitOf,
+} from '../utils/plan-features.util.js';
 import {
   writeActiveSubscriptionCache,
   deleteActiveSubscriptionCache,
@@ -34,6 +38,33 @@ const futureQuery = (organizationId: string) => ({
   organization_id: toObjectId(organizationId),
   status: 'future' as SubscriptionStatus,
 });
+
+/**
+ * Flattens a Subscription document for the admin API: `plan_id` is always a plain
+ * id even when the query populated the plan, so clients can rely on one shape.
+ */
+const toSubscriptionView = (sub: any) => {
+  const populatedPlan =
+    sub.plan_id && typeof sub.plan_id === 'object' ? sub.plan_id : null;
+  return {
+    id: String(sub._id),
+    organization_id: String(sub.organization_id),
+    plan_id: String(populatedPlan?._id ?? sub.plan_id),
+    plan_name: sub.plan_name ?? populatedPlan?.name ?? '',
+    plan_price: sub.plan_price ?? 0,
+    currency_code: sub.currency_code ?? 'inr',
+    billing_cycle: sub.billing_cycle,
+    status: sub.status,
+    started_at: sub.started_at,
+    expires_at: sub.expires_at,
+    queue_priority: sub.queue_priority ?? 0,
+    trial_days: sub.trial_days ?? 0,
+    features: sub.features ?? [],
+    marketing_features: sub.marketing_features ?? [],
+    is_plan_cancel: sub.is_plan_cancel ?? false,
+    cancellation_reason: sub.cancellation_reason ?? null,
+  };
+};
 
 export const assertOrganizationActive = async (
   organizationId: string,
@@ -156,41 +187,31 @@ export const createUsageForSubscription = async (
     ),
   });
 
-const planPriceFor = (
-  plan: IPlan,
-  billingCycle: 'month' | 'quarterly',
-): number => {
-  try {
-    return priceForCycle(plan.price, plan.price_quarterly, billingCycle);
-  } catch (err: any) {
-    if (err.message === 'PLAN_QUARTERLY_PRICE_REQUIRED') {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        'Quarterly pricing is not configured for this plan',
-      );
-    }
-    throw err;
-  }
-};
-
 const decideInitialStatus = async (
   organizationId: string,
   billingCycle: 'month' | 'quarterly',
   trialDays: number,
   forceActive: boolean,
+  startDate?: Date | string | null,
 ): Promise<{
   status: SubscriptionStatus;
   queuePriority: number;
   startedAt: Date;
   expiresAt: Date;
 }> => {
+  const resolveStartDate = (): Date => {
+    if (!startDate) return new Date();
+    const parsed = new Date(startDate);
+    return isNaN(parsed.getTime()) ? new Date() : parsed;
+  };
+
   if (forceActive) {
-    const now = new Date();
+    const startedAt = resolveStartDate();
     return {
       status: 'active',
       queuePriority: 0,
-      startedAt: now,
-      expiresAt: computeExpiresAt(billingCycle, trialDays, now),
+      startedAt,
+      expiresAt: computeExpiresAt(billingCycle, trialDays, startedAt),
     };
   }
   const active = await Subscription.findOne(
@@ -200,15 +221,17 @@ const decideInitialStatus = async (
     queue_priority: 1,
   });
   if (!active && futures.length === 0) {
-    const now = new Date();
+    const startedAt = resolveStartDate();
     return {
       status: 'active',
       queuePriority: 0,
-      startedAt: now,
-      expiresAt: computeExpiresAt(billingCycle, trialDays, now),
+      startedAt,
+      expiresAt: computeExpiresAt(billingCycle, trialDays, startedAt),
     };
   }
-  const chainSource = active ?? futures[futures.length - 1];
+  const chainSource = futures.length
+    ? futures[futures.length - 1]
+    : (active ?? null);
   const startedAt = chainSource ? chainSource.expires_at : new Date();
   return {
     status: 'future',
@@ -232,20 +255,34 @@ export const grantSubscription = async (
     forceActive?: boolean;
     billingCycle?: 'month' | 'quarterly';
     paymentId?: string;
+    startDate?: Date | string | null;
   } = {},
 ): Promise<ISubscription> => {
   const plan = await Plan.findById(planId);
   if (!plan || plan.status !== 1) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Plan not found or not active');
   }
-  const billingCycle = options.billingCycle ?? 'month';
+  // The plan dictates its cycle; an explicit cycle is only honoured when it matches.
+  let billingCycle: 'month' | 'quarterly';
+  let planPrice: number;
+  try {
+    ({ billingCycle, price: planPrice } = resolvePlanPrice(
+      plan,
+      options.billingCycle,
+    ));
+  } catch {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      planPriceErrorMessage(plan, options.billingCycle ?? 'month'),
+    );
+  }
   const trialDays = options.trialDays ?? 0;
-  const planPrice = planPriceFor(plan, billingCycle);
   const decided = await decideInitialStatus(
     organizationId,
     billingCycle,
     trialDays,
     Boolean(options.forceActive),
+    options.startDate ?? null,
   );
 
   const orgId = toObjectId(organizationId);
@@ -325,6 +362,220 @@ export const normalizeQueuePriorities = async (
   }
 };
 
+/**
+ * Admin removes a queued (future) subscription before it ever activates.
+ * Futures carry no Usage rows, so only the queue positions need repacking.
+ */
+export const cancelQueuedSubscription = async (
+  organizationId: string,
+  subscriptionId: string,
+) => {
+  const sub = await Subscription.findOne({
+    _id: subscriptionId,
+    organization_id: toObjectId(organizationId),
+  });
+  if (!sub) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'QUEUED_SUBSCRIPTION_NOT_FOUND');
+  }
+  if (sub.status !== 'future') {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'ONLY_FUTURE_SUBSCRIPTIONS_CAN_BE_CANCELLED',
+    );
+  }
+  sub.status = 'cancelled';
+  sub.cancellation_reason = 'Cancelled from queue';
+  sub.queue_priority = 0;
+  await sub.save();
+  await normalizeQueuePriorities(organizationId);
+  return createResponse(httpStatus.OK, 'Queued subscription cancelled.', {
+    cancelledSubscription: sub._id,
+    futureQueue: await getOrganizationSubscriptionQueue(organizationId),
+  });
+};
+
+/**
+ * Rewrites the schedule of every queued subscription so it reflects the current
+ * queue order. The first future row starts when the active subscription expires
+ * (or now when there is no active one); each following row starts when the
+ * previous one ends. Each row keeps its own cycle and trial allowance, so a
+ * reordering never changes what a customer is entitled to, only when it starts.
+ */
+export const recalculateQueueSchedule = async (organizationId: string) => {
+  const [active, futures] = await Promise.all([
+    Subscription.findOne(activeSubQuery(organizationId)).sort({
+      created_at: -1,
+    }),
+    Subscription.find(futureQuery(organizationId)).sort({ queue_priority: 1 }),
+  ]);
+  if (!futures.length) return;
+
+  let cursor = active?.expires_at ?? new Date();
+  for (const sub of futures) {
+    const startedAt = cursor;
+    cursor = computeExpiresAt(
+      sub.billing_cycle,
+      sub.trial_days ?? 0,
+      startedAt,
+    );
+    sub.started_at = startedAt;
+    sub.expires_at = cursor;
+    await sub.save();
+  }
+};
+
+/**
+ * Drag-and-drop reorder among queued subscriptions. The submitted list must be an
+ * exact permutation of the current future ids, so a stale drag cannot silently drop
+ * or duplicate a queued plan. Priorities are repacked and the schedule is then
+ * recalculated so the dates follow the new order.
+ */
+export const reorderSubscriptionQueue = async (
+  organizationId: string,
+  orderedSubscriptionIds: string[],
+) => {
+  const futures = await Subscription.find(futureQuery(organizationId)).sort({
+    queue_priority: 1,
+  });
+  const futureIds = new Set(futures.map((s) => String(s._id)));
+  const submitted = new Set(orderedSubscriptionIds);
+  const isExactMatch =
+    orderedSubscriptionIds.length === futures.length &&
+    orderedSubscriptionIds.length === submitted.size &&
+    [...futureIds].every((id) => submitted.has(id));
+  if (!isExactMatch) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'QUEUE_ORDER_MISMATCH');
+  }
+
+  const ops = orderedSubscriptionIds.map((id, index) => ({
+    updateOne: {
+      filter: { _id: id },
+      update: { $set: { queue_priority: index + 1 } },
+    },
+  }));
+  await Subscription.bulkWrite(ops);
+  // Cancelled/expired rows must not take part in the promotion sort.
+  await Subscription.updateMany(
+    {
+      organization_id: toObjectId(organizationId),
+      status: { $in: ['cancelled', 'expired'] },
+    },
+    { $set: { queue_priority: 0 } },
+  );
+  await normalizeQueuePriorities(organizationId);
+  await recalculateQueueSchedule(organizationId);
+
+  return createResponse(httpStatus.OK, 'Future queue reordered successfully.', {
+    futureQueue: await getOrganizationSubscriptionQueue(organizationId),
+  });
+};
+
+/**
+ * SaaS-parity bulk limit adjustment, narrowed to ScanFlow's single metered
+ * feature ('scan'). Validates every adjustment first, then applies them all, so a
+ * rejected item cannot leave a partially adjusted quota.
+ *
+ * An active subscription adjusts its Usage row; a queued one adjusts the feature
+ * snapshot on the subscription so the new limit takes effect at promotion.
+ */
+export const adjustScanLimits = async (
+  organizationId: string,
+  subscriptionId: string,
+  adjustments: { delta: number }[],
+) => {
+  if (!adjustments?.length) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'At least one adjustment is required',
+    );
+  }
+  const sub = await Subscription.findOne({
+    _id: subscriptionId,
+    organization_id: toObjectId(organizationId),
+  });
+  if (!sub) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'SUBSCRIPTION_NOT_FOUND');
+  }
+  if (sub.status === 'cancelled') {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'LIMITS_CANNOT_BE_ADJUSTED_ON_CANCELLED',
+    );
+  }
+
+  const feature = (sub.features ?? []).find((f) => f.features_name === 'scan');
+  if (!feature) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'SCAN_FEATURE_NOT_ON_SUBSCRIPTION',
+    );
+  }
+
+  const totalDelta = adjustments.reduce((sum, a) => sum + Number(a.delta), 0);
+  if (!Number.isFinite(totalDelta) || totalDelta <= 0) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'ADJUSTMENT_DELTA_MUST_BE_POSITIVE',
+    );
+  }
+
+  if (sub.status === 'future') {
+    const newLimit = feature.scan_limit + totalDelta;
+    if (newLimit < 0) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'SCAN_LIMIT_WOULD_GO_NEGATIVE',
+      );
+    }
+    await Subscription.updateOne(
+      { _id: sub._id },
+      { $set: { 'features.$[feat].scan_limit': newLimit } },
+      { arrayFilters: [{ 'feat.features_name': 'scan' }] },
+    );
+    return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
+      subscription_id: sub._id,
+      scan_limit: newLimit,
+      status: sub.status,
+    });
+  }
+
+  const usage = await Usage.findOne({
+    organization_id: toObjectId(organizationId),
+    subscription_id: sub._id,
+  });
+  if (!usage) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'USAGE_RECORD_NOT_FOUND');
+  }
+  // The durable row lags the hot-path counter until a flush, so compare against
+  // the live value and report the same number back.
+  const cache = await readActiveSubUsage(organizationId, sub as any);
+  const used = cache?.used ?? usage.usage;
+  const newLimit = usage.scan_limit + totalDelta;
+  if (newLimit < 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'SCAN_LIMIT_WOULD_GO_NEGATIVE');
+  }
+  if (newLimit < used) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'SCAN_LIMIT_BELOW_USAGE');
+  }
+  await Usage.updateOne({ _id: usage._id }, { $set: { scan_limit: newLimit } });
+  // Keep the hot-path cache in step with the durable quota, preserving `used`.
+  if (sub.status === 'active') {
+    await writeActiveSubscriptionCache(
+      String(sub.organization_id),
+      newLimit,
+      sub.expires_at,
+      false,
+      used,
+    );
+  }
+  return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
+    subscription_id: sub._id,
+    scan_limit: newLimit,
+    usage: used,
+    status: sub.status,
+  });
+};
+
 export const normalizeAllQueuePriorities = async (): Promise<void> => {
   const orgIds = await Subscription.distinct('organization_id', {
     status: 'future',
@@ -383,7 +634,7 @@ export const renewSubscription = async (
   if (mode === 'continue') {
     const newExpiry = computeExpiresAt(
       active.billing_cycle,
-      active.trial_days && active.trial_days > 0 ? active.trial_days : 0,
+      0,
       active.expires_at,
     );
     active.expires_at = newExpiry;
@@ -436,8 +687,27 @@ export const renewSubscription = async (
   }
 
   if (mode === 'promote') {
-    const promoted = await promoteEarliestFutureSubscription(organizationId);
-    if (!promoted) {
+    const queuedHead = await Subscription.findOne(futureQuery(organizationId))
+      .sort({ queue_priority: 1 })
+      .select('_id');
+    if (!queuedHead) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'No queued subscription to promote',
+      );
+    }
+
+    // The current active must be retired first, otherwise promoting the queue head
+    // leaves the organization with two active subscriptions.
+    const cancelled = await cancelActiveSubscription(
+      organizationId,
+      'Replaced by queued subscription',
+    );
+    const { cancelledSubscription, promotedSubscription } = cancelled.data;
+    const next = promotedSubscription
+      ? await Subscription.findById(promotedSubscription)
+      : null;
+    if (!next) {
       throw new ApiError(
         httpStatus.NOT_FOUND,
         'No queued subscription to promote',
@@ -447,7 +717,9 @@ export const renewSubscription = async (
       httpStatus.OK,
       'Next queued subscription activated.',
       {
-        subscription: promoted,
+        cancelledSubscription,
+        subscription: next,
+        futureQueue: await getOrganizationSubscriptionQueue(organizationId),
       },
     );
   }
@@ -496,7 +768,11 @@ export const cancelActiveSubscription = async (
 export const forceActivateSubscription = async (
   organizationId: string,
   planId: string,
-  options: { trialDays?: number; billingCycle?: 'month' | 'quarterly' } = {},
+  options: {
+    trialDays?: number;
+    billingCycle?: 'month' | 'quarterly';
+    startDate?: Date | string | null;
+  } = {},
 ) => {
   const existingActive = await getActiveSubscription(organizationId);
   if (existingActive) {
@@ -510,7 +786,8 @@ export const forceActivateSubscription = async (
   const created = await grantSubscription(organizationId, planId, {
     trialDays: options.trialDays ?? 0,
     forceActive: true,
-    billingCycle: options.billingCycle ?? 'month',
+    billingCycle: options.billingCycle,
+    startDate: options.startDate ?? null,
   });
   await normalizeQueuePriorities(organizationId);
   return createResponse(httpStatus.OK, 'Subscription force-activated.', {
@@ -527,15 +804,36 @@ export const getSubscriptionSummary = async (
   const futureQueue = await Subscription.find(futureQuery(organizationId))
     .populate('plan_id')
     .sort({ queue_priority: 1 });
-  const usage = active
-    ? await Usage.findOne({
-        organization_id: toObjectId(organizationId),
-        subscription_id: active._id,
-      })
-    : null;
+
+  // Same shape as getOrganizationUsage so the panel has a single usage contract.
+  let usage: {
+    period_count: number;
+    scan_limit: number;
+    quota_period: 'month' | 'quarterly' | null;
+    subscription_expires_at: Date | null;
+  } = {
+    period_count: 0,
+    scan_limit: 0,
+    quota_period: null,
+    subscription_expires_at: null,
+  };
+  if (active) {
+    const row = await Usage.findOne({
+      organization_id: toObjectId(organizationId),
+      subscription_id: active._id,
+    });
+    const cache = await readActiveSubUsage(organizationId, active as any);
+    usage = {
+      period_count: cache?.used ?? row?.usage ?? 0,
+      scan_limit: scanLimitOf(active.features),
+      quota_period: active.billing_cycle,
+      subscription_expires_at: active.expires_at,
+    };
+  }
+
   return createResponse(httpStatus.OK, 'Subscription fetched successfully.', {
-    activeSubscription: active,
-    futureQueue,
+    activeSubscription: active ? toSubscriptionView(active) : null,
+    futureQueue: futureQueue.map((sub) => toSubscriptionView(sub)),
     usage,
   });
 };

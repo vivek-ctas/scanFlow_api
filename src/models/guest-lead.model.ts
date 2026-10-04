@@ -1,6 +1,7 @@
 import mongoose, { Document, Model, Schema } from 'mongoose';
 import { toJSON } from './plugins/toJSON.plugin.js';
 import { paginate } from './plugins/paginate.plugin.js';
+import type { BillingCycle } from './plan.model.js';
 
 export type GuestLeadStatus =
   'pending' | 'initiated' | 'success' | 'failed' | 'cancelled';
@@ -14,6 +15,8 @@ export interface IGuestLead extends Document {
   country_name?: string;
   currency_code: string;
   plan_id: mongoose.Types.ObjectId;
+  /** Cycle copied from the plan at checkout — the lead keeps what was quoted. */
+  billing_cycle: BillingCycle;
   organization_id?: mongoose.Types.ObjectId | null;
   trial_days: number;
   status: GuestLeadStatus;
@@ -49,6 +52,11 @@ const guestLeadSchema = new Schema<IGuestLead, IGuestLeadModel>(
       lowercase: true,
     },
     plan_id: { type: Schema.Types.ObjectId, ref: 'tbl_plan', required: true },
+    billing_cycle: {
+      type: String,
+      enum: ['month', 'quarterly'] as BillingCycle[],
+      default: 'month',
+    },
     organization_id: {
       type: Schema.Types.ObjectId,
       ref: 'tbl_organization',

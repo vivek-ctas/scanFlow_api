@@ -6,6 +6,7 @@ export interface ICountry extends Document {
   country_code: string;
   country_name: string;
   currency_code: string;
+  aliases: string[];
 }
 
 interface ICountryModel extends Model<ICountry> {
@@ -18,8 +19,9 @@ interface ICountryModel extends Model<ICountry> {
 const countrySchema = new Schema<ICountry, ICountryModel>(
   {
     country_code: { type: String, required: true, trim: true, index: true },
-    country_name: { type: String, required: true, trim: true },
+    country_name: { type: String, required: true, trim: true, index: true },
     currency_code: { type: String, required: true, trim: true },
+    aliases: { type: [String], default: [] },
   },
   { timestamps: false, collection: 'tbl_country_data' },
 );

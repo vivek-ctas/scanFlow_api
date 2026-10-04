@@ -11,6 +11,7 @@ import {
   Scan,
   WebhookConfig,
   WebhookDelivery,
+  Country,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -40,6 +41,7 @@ const MODELS = [
   Scan,
   WebhookConfig,
   WebhookDelivery,
+  Country,
 ];
 
 export const clearDb = async (): Promise<void> => {
@@ -60,15 +62,19 @@ export const dropCollections = async (): Promise<void> => {
 };
 
 export const createOrg = async (overrides: Record<string, any> = {}) =>
-  Organization.create({ name: 'Test Org', status: 1, ...overrides });
+  Organization.create({ company_name: 'Test Org', status: 1, ...overrides });
 
 export const createPlan = async (overrides: Record<string, any> = {}) => {
   const { scan_limit, ...rest } = overrides;
   const scanLimit = scan_limit ?? 100;
+  const billingCycle = rest.billing_cycle ?? 'month';
+  const price = rest.price ?? 100;
   return Plan.create({
     name: 'Test Plan',
-    price: 100,
-    price_quarterly: null,
+    price,
+    // Quarterly amount is always numeric; `billing_cycle` decides what is charged.
+    price_quarterly: price * 3,
+    billing_cycle: billingCycle,
     currency: 'INR',
     trial_days: 0,
     features: [{ features_name: 'scan', scan_limit: scanLimit }],
@@ -80,6 +86,19 @@ export const createPlan = async (overrides: Record<string, any> = {}) => {
     ...rest,
   });
 };
+
+/**
+ * Country rows are the source of truth the organization write path resolves
+ * against, so any test that sends `country_name` needs one seeded.
+ */
+export const createCountry = async (overrides: Record<string, any> = {}) =>
+  Country.create({
+    country_code: 'IND',
+    country_name: 'India',
+    currency_code: 'INR',
+    aliases: [],
+    ...overrides,
+  });
 
 export interface TestUserDoc {
   id: string;

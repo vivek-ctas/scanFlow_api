@@ -1,8 +1,13 @@
 import httpStatus from 'http-status';
 import { Organization } from '../../models/organization.model.js';
 import { User } from '../../models/user.model.js';
+import { Plan } from '../../models/plan.model.js';
 import { Subscription } from '../../models/subscription.model.js';
 import { ApiError } from '../../utils/ApiError.js';
+import {
+  planPriceErrorMessage,
+  resolvePlanPrice,
+} from '../../utils/plan-features.util.js';
 import {
   computeStatus,
   createResponse,
@@ -10,33 +15,75 @@ import {
   normalizeEmail,
   toObjectId,
 } from '../common.service.js';
+import { grantSubscription } from '../subscription.service.js';
+import { resolveCountryName } from '../country-resolver.service.js';
 
 export const createOrganization = async (
   orgBody: Record<string, any>,
   createdBy?: string,
 ) => {
-  const adminEmail = normalizeEmail(orgBody.admin_email);
-  if (!adminEmail) {
+  const isLegacy = orgBody.admin_email !== undefined;
+
+  const canonicalCountry = await resolveCountryName(
+    isLegacy ? orgBody.admin_country_name : orgBody.country_name,
+  );
+  const adminFields = isLegacy
+    ? {
+        first_name: orgBody.admin_first_name || 'Organization',
+        last_name: orgBody.admin_last_name || 'Admin',
+        email: normalizeEmail(orgBody.admin_email),
+        contact_number: orgBody.admin_contact_no,
+        company_name: orgBody.admin_company_name,
+        country_name: canonicalCountry,
+        business_address: orgBody.admin_business_address,
+      }
+    : {
+        first_name: orgBody.first_name,
+        last_name: orgBody.last_name,
+        email: normalizeEmail(orgBody.email),
+        contact_number: orgBody.contact_number,
+        company_name: orgBody.company_name,
+        country_name: canonicalCountry,
+        business_address: orgBody.business_address,
+      };
+
+  if (!adminFields.email) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'admin_email is required');
   }
-  if (await User.isEmailTaken(adminEmail)) {
+  if (await User.isEmailTaken(adminFields.email)) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
 
+  if (orgBody.plan_id) {
+    const plan = await Plan.findById(orgBody.plan_id);
+    if (!plan || plan.status !== 1) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Plan not found or not active',
+      );
+    }
+    // Fail fast, before any write: the requested cycle must match the plan's cycle.
+    try {
+      resolvePlanPrice(plan, orgBody.billing_cycle);
+    } catch {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        planPriceErrorMessage(plan, orgBody.billing_cycle ?? 'month'),
+      );
+    }
+  }
+
   const org = await Organization.create({
-    name: orgBody.name,
+    company_name: orgBody.company_name ?? orgBody.name,
     email: orgBody.email,
     contact_number: orgBody.contact_number,
-    country_name: orgBody.country_name,
+    country_name: canonicalCountry,
     status: orgBody.status ?? 1,
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
 
   const admin = await User.create({
-    first_name: orgBody.admin_first_name || 'Organization',
-    last_name: orgBody.admin_last_name || 'Admin',
-    email: adminEmail,
-    contact_number: orgBody.admin_contact_no,
+    ...adminFields,
     role: 'ORGANIZATION_ADMIN',
     organization_id: org._id,
     is_super_admin: false,
@@ -45,10 +92,22 @@ export const createOrganization = async (
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
 
+  const data: Record<string, any> = { organization: org, admin };
+  if (orgBody.plan_id) {
+    data.subscription = await grantSubscription(
+      String(org._id),
+      String(orgBody.plan_id),
+      {
+        billingCycle: orgBody.billing_cycle,
+        startDate: orgBody.start_date ?? null,
+      },
+    );
+  }
+
   return createResponse(
     httpStatus.CREATED,
     'Organization created successfully.',
-    { organization: org, admin },
+    data,
   );
 };
 
@@ -93,7 +152,7 @@ export const listOrganizations = async (
   }
   if (filter.search) {
     const regex = new RegExp(escapeRegExp(String(filter.search)), 'i');
-    query.$or = [{ name: regex }, { email: regex }];
+    query.$or = [{ company_name: regex }, { email: regex }];
   }
 
   const orgs = await (Organization as any).paginate(query, options);
@@ -125,12 +184,51 @@ export const getOrganizationById = async (organizationId: string) => {
   return org;
 };
 
+/**
+ * Returns organization with admin user details for API responses.
+ * Does NOT return a Mongoose document - it's a plain object for serialization.
+ */
+export const getOrganizationWithAdmin = async (organizationId: string) => {
+  const org = await Organization.findById(organizationId);
+  if (!org || org.status === 2) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Organization not found');
+  }
+
+  const adminUser = await User.findOne({
+    organization_id: org._id,
+    role: 'ORGANIZATION_ADMIN',
+  }).select(
+    'first_name last_name business_address email contact_number country_name',
+  );
+
+  const orgObj = org.toObject() as Record<string, any>;
+  if (adminUser) {
+    orgObj.admin = {
+      first_name: adminUser.first_name,
+      last_name: adminUser.last_name,
+      business_address: adminUser.business_address,
+      email: adminUser.email,
+      contact_number: adminUser.contact_number,
+      country_name: adminUser.country_name,
+    };
+  }
+  return orgObj;
+};
+
 const ORG_UPDATE_KEYS = [
-  'name',
+  'company_name',
   'email',
   'contact_number',
   'country_name',
   'status',
+];
+
+const ADMIN_USER_CASCADE_KEYS = [
+  'first_name',
+  'last_name',
+  'business_address',
+  'country_name',
+  'contact_number',
 ];
 
 export const updateOrganizationById = async (
@@ -139,13 +237,60 @@ export const updateOrganizationById = async (
   modifiedBy?: string,
 ) => {
   const org = await getOrganizationById(organizationId);
+  const normalized = { ...updateBody };
+  if (normalized.company_name === undefined && normalized.name !== undefined) {
+    normalized.company_name = normalized.name;
+  }
+  if (normalized.country_name !== undefined) {
+    if (!normalized.country_name?.trim()) {
+      normalized.country_name = '';
+    } else {
+      const canonical = await resolveCountryName(normalized.country_name);
+      if (canonical) normalized.country_name = canonical;
+      else delete normalized.country_name;
+    }
+  }
   ORG_UPDATE_KEYS.forEach((key) => {
-    if (updateBody[key] !== undefined) {
-      (org as any)[key] = updateBody[key];
+    if (normalized[key] !== undefined) {
+      (org as any)[key] = normalized[key];
     }
   });
   org.modified_by = modifiedBy ? toObjectId(modifiedBy) : null;
   await org.save();
+
+  const adminSet: Record<string, any> = {};
+  ADMIN_USER_CASCADE_KEYS.forEach((key) => {
+    if (normalized[key] !== undefined) {
+      adminSet[key] = normalized[key];
+    }
+  });
+  if (Object.keys(adminSet).length) {
+    if (normalized.company_name !== undefined) {
+      adminSet.company_name = normalized.company_name;
+    }
+    ORG_UPDATE_KEYS.forEach((key) => {
+      if (adminSet[key] !== undefined && (org as any)[key] !== undefined) {
+        adminSet[key] = (org as any)[key];
+      }
+    });
+    const adminUpdate = await User.updateOne(
+      { organization_id: org._id, role: 'ORGANIZATION_ADMIN' },
+      { $set: adminSet },
+    );
+    if (!adminUpdate.matchedCount) {
+      ADMIN_USER_CASCADE_KEYS.forEach((key) => {
+        if (normalized[key] !== undefined) {
+          delete normalized[key];
+        }
+      });
+    }
+  } else if (normalized.company_name !== undefined) {
+    await User.updateOne(
+      { organization_id: org._id, role: 'ORGANIZATION_ADMIN' },
+      { $set: { company_name: normalized.company_name } },
+    );
+  }
+
   return org;
 };
 

@@ -9,6 +9,8 @@ const subscriptionParams = {
 
 const billingCycle = Joi.string().valid('month', 'quarterly');
 
+const startDate = Joi.date().optional().allow('', null);
+
 export const getSubscription = {
   ...subscriptionParams,
 };
@@ -22,7 +24,9 @@ export const assignPlan = {
   body: Joi.object()
     .keys({
       plan_id: Joi.string().custom(objectId).required(),
-      billing_cycle: billingCycle.optional().default('month'),
+      // Optional: defaults to the plan's own billing_cycle. Must match when sent.
+      billing_cycle: billingCycle.optional(),
+      start_date: startDate,
     })
     .min(1),
 };
@@ -46,6 +50,48 @@ export const cancelActiveSubscription = {
     .keys({
       reason: Joi.string().allow('', null).optional(),
     })
+    .optional(),
+};
+
+export const cancelQueuedSubscription = {
+  ...subscriptionParams,
+  body: Joi.object()
+    .keys({
+      subscription_id: Joi.string().custom(objectId).required(),
+    })
+    .min(1),
+};
+
+export const reorderSubscriptionQueue = {
+  ...subscriptionParams,
+  body: Joi.object()
+    .keys({
+      orderedSubscriptionIds: Joi.array()
+        .items(Joi.string().custom(objectId))
+        .min(1)
+        .required(),
+    })
+    .min(1),
+};
+
+// ScanFlow meters a single feature ('scan'), so the SaaS per-feature array
+// collapses to one adjustment entry.
+export const adjustScanLimits = {
+  ...subscriptionParams,
+  body: Joi.object()
+    .keys({
+      subscription_id: Joi.string().custom(objectId).required(),
+      adjustments: Joi.array()
+        .items(
+          Joi.object()
+            .keys({
+              delta: Joi.number().integer().min(1).required(),
+            })
+            .min(1),
+        )
+        .min(1)
+        .required(),
+    })
     .min(1),
 };
 
@@ -54,7 +100,8 @@ export const forceActivateSubscription = {
   body: Joi.object()
     .keys({
       plan_id: Joi.string().custom(objectId).required(),
-      billing_cycle: billingCycle.optional().default('month'),
+      billing_cycle: billingCycle.optional(),
+      start_date: startDate,
       trial_days: Joi.number().integer().min(0).optional().default(0),
     })
     .min(1),

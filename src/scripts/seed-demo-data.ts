@@ -3,7 +3,7 @@ import config from '../config/config.js';
 import { logger } from '../config/logger.js';
 import { Organization } from '../models/organization.model.js';
 import { User } from '../models/user.model.js';
-import { Plan } from '../models/plan.model.js';
+import { Plan, type BillingCycle } from '../models/plan.model.js';
 import { Usage } from '../models/usage.model.js';
 import { Scan } from '../models/scan.model.js';
 import { WebhookConfig } from '../models/webhook-config.model.js';
@@ -11,17 +11,36 @@ import { WebhookDelivery } from '../models/webhook-delivery.model.js';
 import { SUPER_ADMIN_ROLE } from '../config/roles.js';
 import { grantSubscription } from '../services/subscription.service.js';
 import { writeActiveSubscriptionCache } from '../services/quota.service.js';
-import { scanLimitOf } from '../utils/plan-features.util.js';
+import {
+  computeQuarterlyPrice,
+  scanLimitOf,
+} from '../utils/plan-features.util.js';
 
 const COMMON_PASSWORD = 'Scanflow@123';
 
-const PLAN_SEED = [
+interface PlanSeed {
+  name: string;
+  desc: string;
+  billing_cycle: BillingCycle;
+  price: number;
+  /** Always stored as a number, even for monthly-sold plans. */
+  price_quarterly: number;
+  currency: string;
+  trial_days: number;
+  scan_limit: number;
+  marketing_features: string[];
+  is_popular: boolean;
+  discount: number;
+}
+
+const PLAN_SEED: PlanSeed[] = [
   {
     name: 'Starter',
     desc: 'For small shops getting started with scan capture.',
-    price: 1499,
-    price_quarterly: 3999,
-    currency: 'inr',
+    billing_cycle: 'month',
+    price: 29,
+    price_quarterly: 79,
+    currency: 'usd',
     trial_days: 14,
     scan_limit: 500,
     marketing_features: [
@@ -36,9 +55,10 @@ const PLAN_SEED = [
   {
     name: 'Growth',
     desc: 'For growing retail teams with steady scan volume.',
-    price: 2999,
-    price_quarterly: 7999,
-    currency: 'inr',
+    billing_cycle: 'month',
+    price: 79,
+    price_quarterly: 199,
+    currency: 'usd',
     trial_days: 14,
     scan_limit: 2000,
     marketing_features: [
@@ -53,9 +73,10 @@ const PLAN_SEED = [
   {
     name: 'Pro',
     desc: 'For multi-branch businesses with heavy scan usage.',
-    price: 5999,
-    price_quarterly: 15999,
-    currency: 'inr',
+    billing_cycle: 'quarterly',
+    price: 99,
+    price_quarterly: 249,
+    currency: 'usd',
     trial_days: 0,
     scan_limit: 10000,
     marketing_features: [
@@ -70,9 +91,10 @@ const PLAN_SEED = [
   {
     name: 'Enterprise',
     desc: 'Custom volume and SLA-backed support.',
-    price: 14999,
-    price_quarterly: 39999,
-    currency: 'inr',
+    billing_cycle: 'month',
+    price: 299,
+    price_quarterly: 799,
+    currency: 'usd',
     trial_days: 0,
     scan_limit: 50000,
     marketing_features: [
@@ -241,7 +263,13 @@ const run = async () => {
       name: p.name,
       desc: p.desc,
       price: p.price,
-      price_quarterly: p.price_quarterly,
+      price_quarterly: computeQuarterlyPrice(
+        p.billing_cycle,
+        p.price,
+        p.discount,
+        p.price_quarterly,
+      ),
+      billing_cycle: p.billing_cycle,
       currency: p.currency,
       trial_days: p.trial_days,
       features: [{ features_name: 'scan', scan_limit: p.scan_limit }],
@@ -252,7 +280,7 @@ const run = async () => {
       discount: p.discount,
     });
     plans[p.name] = doc;
-    logger.info(`[SEED] Plan "${p.name}" -> ${doc._id}`);
+    logger.info(`[SEED] Plan "${p.name}" (${p.billing_cycle}) -> ${doc._id}`);
   }
 
   const superAdmin = await User.create({
@@ -272,7 +300,7 @@ const run = async () => {
   // Insert multiple organizations at once, then track the created docs by name.
   const orgDocs = await Organization.insertMany(
     ORG_SEED.map((o) => ({
-      name: o.name,
+      company_name: o.name,
       email: o.email,
       contact_number: o.contact_number,
       status: 1,
@@ -370,7 +398,7 @@ const run = async () => {
     const startMs = new Date(sub.started_at).getTime();
     const spanMs = Math.max(1, now - startMs);
     const scanDocs: any[] = [];
-    const seed = org.name.length * 13 + orgSeed.used;
+    const seed = org.company_name.length * 13 + orgSeed.used;
 
     const scanForUser = (index: number) => {
       const operatorPool = orgUsers.filter((u) => u.role === 'OPERATOR');

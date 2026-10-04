@@ -36,7 +36,11 @@ export const assignPlan = catchAsync(async (req: Request, res: Response) => {
   const sub = await subscriptionService.grantSubscription(
     organizationId,
     req.body.plan_id,
-    { trialDays: 0, billingCycle: req.body.billing_cycle ?? 'month' },
+    {
+      trialDays: 0,
+      billingCycle: req.body.billing_cycle,
+      startDate: req.body.start_date ?? null,
+    },
   );
   res.status(httpStatus.CREATED).json(
     createResponse(httpStatus.CREATED, 'Plan assigned successfully.', {
@@ -84,8 +88,43 @@ export const forceActivateSubscription = catchAsync(
       req.body.plan_id,
       {
         trialDays: req.body.trial_days ?? 0,
-        billingCycle: req.body.billing_cycle ?? 'month',
+        billingCycle: req.body.billing_cycle,
+        startDate: req.body.start_date ?? null,
       },
+    );
+    res.status(result.status).json(result);
+  },
+);
+
+export const cancelQueuedSubscription = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const result = await subscriptionService.cancelQueuedSubscription(
+      organizationId,
+      req.body.subscription_id,
+    );
+    res.status(result.status).json(result);
+  },
+);
+
+export const reorderSubscriptionQueue = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const result = await subscriptionService.reorderSubscriptionQueue(
+      organizationId,
+      req.body.orderedSubscriptionIds,
+    );
+    res.status(result.status).json(result);
+  },
+);
+
+export const adjustScanLimits = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const result = await subscriptionService.adjustScanLimits(
+      organizationId,
+      req.body.subscription_id,
+      req.body.adjustments,
     );
     res.status(result.status).json(result);
   },
