@@ -19,6 +19,13 @@ router
     controller.createScan,
   );
 
+router.post(
+  '/batch',
+  auth('manageScans'),
+  validate(validation.batchCreateScans),
+  controller.batchCreateScans,
+);
+
 router.get(
   '/:scanId',
   auth('manageScans'),

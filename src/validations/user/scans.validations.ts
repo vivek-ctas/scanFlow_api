@@ -1,14 +1,23 @@
 import Joi from 'joi';
 import { objectId } from '../custom.validation.js';
 
+export const MAX_BATCH_SCANS = 50;
+const scanBody = Joi.object().keys({
+  client_scan_id: Joi.string().required(),
+  barcode: Joi.string().required(),
+  barcode_type: Joi.string().allow('', null).optional(),
+  device_id: Joi.string().allow('', null).optional(),
+  scanned_at: Joi.date().optional(),
+  organization_id: Joi.string().custom(objectId).optional(),
+});
+
 export const createScan = {
+  body: scanBody,
+};
+
+export const batchCreateScans = {
   body: Joi.object().keys({
-    client_scan_id: Joi.string().required(),
-    barcode: Joi.string().required(),
-    barcode_type: Joi.string().allow('', null).optional(),
-    device_id: Joi.string().allow('', null).optional(),
-    scanned_at: Joi.date().optional(),
-    organization_id: Joi.string().custom(objectId).optional(),
+    scans: Joi.array().items(scanBody).min(1).max(MAX_BATCH_SCANS).required(),
   }),
 };
 
