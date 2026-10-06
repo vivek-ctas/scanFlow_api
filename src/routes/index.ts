@@ -14,6 +14,7 @@ export const PUBLIC_PATHS = [
   '/health',
   '/public-checkout',
   '/countries',
+  '/plans/public',
 ];
 
 const router = Router();

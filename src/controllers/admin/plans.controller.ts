@@ -18,6 +18,13 @@ export const listPlans = catchAsync(async (req: Request, res: Response) => {
   res.status(result.status).json(result);
 });
 
+export const listPublicPlans = catchAsync(
+  async (_req: Request, res: Response) => {
+    const result = await planService.listPublicPlans();
+    res.status(result.status).json(result);
+  },
+);
+
 export const createPlan = catchAsync(async (req: Request, res: Response) => {
   const result = await planService.createPlan(req.body);
   res.status(result.status).json(result);

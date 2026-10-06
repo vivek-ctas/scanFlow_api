@@ -18,6 +18,11 @@ export interface RawBodyRequest extends Request {
   rawBody?: Buffer;
 }
 
+export const createLead = catchAsync(async (req: Request, res: Response) => {
+  const result = await publicCheckoutService.createLead(req.body);
+  res.status(result.status).json(result);
+});
+
 export const createCheckout = catchAsync(
   async (req: Request, res: Response) => {
     const result = await publicCheckoutService.createCheckout(req.body);

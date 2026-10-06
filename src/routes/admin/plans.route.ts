@@ -6,6 +6,12 @@ import * as plansValidation from '../../validations/admin/plans.validations.js';
 
 const router = Router();
 
+router.get(
+  '/public/plans',
+  validate(plansValidation.listPublicPlans),
+  plansController.listPublicPlans,
+);
+
 router
   .route('/')
   .get(
