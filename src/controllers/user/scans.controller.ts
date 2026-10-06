@@ -12,6 +12,13 @@ export const createScan = catchAsync(async (req: Request, res: Response) => {
   res.status(result.status).json(result);
 });
 
+export const batchCreateScans = catchAsync(
+  async (req: Request, res: Response) => {
+    const result = await scanService.batchCreateScans(req.body.scans, req.user);
+    res.status(result.status).json(result);
+  },
+);
+
 export const listScans = catchAsync(async (req: Request, res: Response) => {
   const filter = pick(req.query, ['organization_id', 'user_id', 'barcode']);
   const options = pick(req.query, ['sort_by', 'limit', 'page']);
