@@ -102,3 +102,62 @@ export const sendPaymentFailureEmail = async (
      subscription was activated. You can retry the checkout at any time.</p>`,
     'Payment not completed',
   );
+
+/**
+ * Confirmation email to the visitor who submitted the contact form.
+ */
+export const sendContactConfirmationEmail = async (
+  to: string,
+  info: { name: string; inquiryType: string },
+) =>
+  deliverTyped(
+    to,
+    'We received your message — ScanFlow',
+    `<p>Hi ${info.name},</p>
+     <p>Thanks for reaching out. We've received your ${
+       info.inquiryType || 'general'
+     } inquiry and a member of our team will get back to you within 24 hours.</p>
+     <p>— The ScanFlow team</p>`,
+    `Contact confirmation to ${to}`,
+  );
+
+/**
+ * Notification email to the company whenever a new contact inquiry lands.
+ */
+export const sendContactNotificationEmail = async (info: {
+  name: string;
+  email: string;
+  company?: string;
+  inquiryType: string;
+  message: string;
+}) =>
+  deliverTyped(
+    config.email.contactRecipient || 'info@scanflow.app',
+    `New ScanFlow contact inquiry — ${info.name}`,
+    `<p><strong>Name:</strong> ${info.name}</p>
+     <p><strong>Email:</strong> ${info.email}</p>
+     ${info.company ? `<p><strong>Company:</strong> ${info.company}</p>` : ''}
+     <p><strong>Inquiry type:</strong> ${info.inquiryType}</p>
+     <p><strong>Message:</strong></p>
+     <p style="white-space:pre-wrap;">${info.message}</p>`,
+    `New contact inquiry from ${info.name}`,
+  );
+
+/**
+ * Notification email to the visitor once an admin replies from the panel.
+ */
+export const sendContactReplyEmail = async (
+  to: string,
+  info: { name: string; message: string },
+) =>
+  deliverTyped(
+    to,
+    'ScanFlow — Response to your inquiry',
+    `<p>Hi ${info.name},</p>
+     <p>Here is our response to your inquiry:</p>
+     <p style="white-space:pre-wrap;">${info.message}</p>
+     <p>If you have any further questions, just reply to this email or reach
+     out to us again through the website.</p>
+     <p>— The ScanFlow team</p>`,
+    `Reply sent to ${to}`,
+  );

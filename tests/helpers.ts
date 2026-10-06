@@ -7,11 +7,13 @@ import {
   Subscription,
   Usage,
   GuestLead,
+  Contact,
   Payment,
   Scan,
   WebhookConfig,
   WebhookDelivery,
   Country,
+  WebSettings,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -37,11 +39,13 @@ const MODELS = [
   Subscription,
   Usage,
   GuestLead,
+  Contact,
   Payment,
   Scan,
   WebhookConfig,
   WebhookDelivery,
   Country,
+  WebSettings,
 ];
 
 export const clearDb = async (): Promise<void> => {
