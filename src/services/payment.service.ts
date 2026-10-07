@@ -5,10 +5,8 @@ import { Organization } from '../models/organization.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { createOrganization } from './admin/organizations.service.js';
 import { grantSubscription } from './subscription.service.js';
-import {
-  sendPaymentSuccessEmail,
-  sendPaymentFailureEmail,
-} from './email.service.js';
+import { sendPaymentFailureEmail } from './email.service.js';
+import { dispatchSubscriptionGrantEmails } from './subscription-email.service.js';
 import { logger } from '../config/logger.js';
 
 export interface ProcessGatewaySuccessInput {
@@ -31,8 +29,6 @@ export const processGatewaySuccess = async ({
   transactionId,
   gateway,
   successPayload,
-  amount,
-  currency,
 }: ProcessGatewaySuccessInput) => {
   const payment = await Payment.findOne({ order_id: orderId });
   if (!payment) {
@@ -122,15 +118,10 @@ export const processGatewaySuccess = async ({
     payment.invoice_number = `INV-${String(payment._id).slice(-8)}`;
     await payment.save();
 
-    await sendPaymentSuccessEmail(lead.email, {
-      firstName: lead.first_name,
-      organizationName: organization.company_name,
-      planName: `Plan (${subscription.billing_cycle})`,
-      amount,
-      currency,
-      invoiceNumber: payment.invoice_number,
-      invoiceUrl: undefined,
-    });
+    void dispatchSubscriptionGrantEmails(
+      String(organization._id),
+      subscription as any,
+    );
 
     await GuestLead.updateOne(
       { _id: lead._id },

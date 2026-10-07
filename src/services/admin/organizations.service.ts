@@ -16,6 +16,7 @@ import {
   toObjectId,
 } from '../common.service.js';
 import { grantSubscription } from '../subscription.service.js';
+import { dispatchSubscriptionGrantEmails } from '../subscription-email.service.js';
 import { resolveCountryName } from '../country-resolver.service.js';
 
 export const createOrganization = async (
@@ -102,6 +103,7 @@ export const createOrganization = async (
         startDate: orgBody.start_date ?? null,
       },
     );
+    void dispatchSubscriptionGrantEmails(String(org._id), data.subscription);
   }
 
   return createResponse(

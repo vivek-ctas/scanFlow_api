@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import { catchAsync } from '../../utils/catchAsync.js';
 import * as subscriptionService from '../../services/subscription.service.js';
+import { dispatchSubscriptionGrantEmails } from '../../services/subscription-email.service.js';
 import { createResponse } from '../../services/common.service.js';
 import { Request, Response } from 'express';
 
@@ -42,6 +43,7 @@ export const assignPlan = catchAsync(async (req: Request, res: Response) => {
       startDate: req.body.start_date ?? null,
     },
   );
+  void dispatchSubscriptionGrantEmails(organizationId, sub as any);
   res.status(httpStatus.CREATED).json(
     createResponse(httpStatus.CREATED, 'Plan assigned successfully.', {
       subscription: sub,

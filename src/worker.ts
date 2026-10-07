@@ -8,14 +8,16 @@ import {
   sweepWebhookBatches,
 } from './queues/webhook.worker.js';
 import { reconcileScanUsage } from './services/quota.service.js';
+import { normalizeAllQueuePriorities } from './services/subscription.service.js';
 import {
-  activateEligibleSubscriptions,
-  normalizeAllQueuePriorities,
-} from './services/subscription.service.js';
+  runSubscriptionExpiryJob,
+  runSubscriptionReminderJob,
+} from './cron/subscription/index.js';
 
 let worker: Awaited<ReturnType<typeof startWebhookWorker>> | null = null;
 let reconcileTimer: NodeJS.Timeout | null = null;
 let activationTimer: NodeJS.Timeout | null = null;
+let reminderTimer: NodeJS.Timeout | null = null;
 let purgeTimer: NodeJS.Timeout | null = null;
 let webhookBatchTimer: NodeJS.Timeout | null = null;
 
@@ -29,14 +31,11 @@ const reconcile = async () => {
 };
 
 const everyMinute = async () => {
-  try {
-    await activateEligibleSubscriptions();
-    logger.info(
-      '[SUBSCRIPTIONS] eligible-subscription activation pass complete',
-    );
-  } catch (err: any) {
-    logger.error(`[SUBSCRIPTIONS] activation failed: ${err.message}`);
-  }
+  await runSubscriptionExpiryJob();
+};
+
+const everyHalfHour = async () => {
+  await runSubscriptionReminderJob();
 };
 
 const everyHour = async () => {
@@ -66,8 +65,10 @@ const start = async () => {
   await normalizeAllQueuePriorities();
   await everyMinute();
   await reconcile();
+  await everyHalfHour();
   reconcileTimer = setInterval(reconcile, 30_000);
   activationTimer = setInterval(everyMinute, 60_000);
+  reminderTimer = setInterval(everyHalfHour, 1_800_000);
   purgeTimer = setInterval(everyHour, 3_600_000);
   webhookBatchTimer = setInterval(
     () =>
@@ -85,6 +86,9 @@ const shutdown = async () => {
   }
   if (activationTimer) {
     clearInterval(activationTimer);
+  }
+  if (reminderTimer) {
+    clearInterval(reminderTimer);
   }
   if (purgeTimer) {
     clearInterval(purgeTimer);

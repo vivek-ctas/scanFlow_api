@@ -28,6 +28,11 @@ import {
   readActiveSubUsage,
 } from './quota.service.js';
 import { isSuperAdmin } from '../middlewares/guards/isSuperAdmin.js';
+import {
+  dispatchSubscriptionActivatedEmail,
+  dispatchSubscriptionExpiredEmail,
+  dispatchSubscriptionGrantEmails,
+} from './subscription-email.service.js';
 
 const activeSubQuery = (organizationId: string) => ({
   organization_id: toObjectId(organizationId),
@@ -342,6 +347,7 @@ export const promoteEarliestFutureSubscription = async (
   await createUsageForSubscription(earliest);
   await writeActiveSubCache(earliest, true);
   await normalizeQueuePriorities(organizationId);
+  void dispatchSubscriptionActivatedEmail(organizationId, earliest);
   return earliest;
 };
 
@@ -602,6 +608,7 @@ export const activateEligibleSubscriptions = async (): Promise<void> => {
       active.status = 'expired';
       await active.save();
       orgIds.add(orgId);
+      void dispatchSubscriptionExpiredEmail(orgId, active);
     }
   }
 
@@ -657,7 +664,7 @@ export const renewSubscription = async (
         currency_code: active.currency_code,
         billing_cycle: active.billing_cycle,
       });
-      await Subscription.create({
+      const queuedSub = await Subscription.create({
         organization_id: toObjectId(organizationId),
         plan_id: active.plan_id,
         payment_id: nextPaymentId,
@@ -678,6 +685,7 @@ export const renewSubscription = async (
         plan_name: active.plan_name,
         is_plan_cancel: false,
       });
+      void dispatchSubscriptionGrantEmails(organizationId, queuedSub as any);
     }
     await normalizeQueuePriorities(organizationId);
     return createResponse(httpStatus.OK, 'Subscription renewed.', {
@@ -738,6 +746,7 @@ export const renewSubscription = async (
     },
   );
   await normalizeQueuePriorities(organizationId);
+  void dispatchSubscriptionGrantEmails(organizationId, created as any);
   return createResponse(httpStatus.OK, 'Subscription recreated.', {
     subscription: created,
     futureQueue: await getOrganizationSubscriptionQueue(organizationId),
@@ -790,6 +799,7 @@ export const forceActivateSubscription = async (
     startDate: options.startDate ?? null,
   });
   await normalizeQueuePriorities(organizationId);
+  void dispatchSubscriptionGrantEmails(organizationId, created as any);
   return createResponse(httpStatus.OK, 'Subscription force-activated.', {
     subscription: created,
   });
