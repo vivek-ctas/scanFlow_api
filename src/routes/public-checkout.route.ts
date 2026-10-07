@@ -5,6 +5,8 @@ import * as controller from '../controllers/public-checkout.controller.js';
 
 const router = Router();
 
+router.post('/lead', validate(validation.createLead), controller.createLead);
+
 router.post(
   '/subscribe',
   validate(validation.createCheckout),

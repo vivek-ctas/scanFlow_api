@@ -7,6 +7,8 @@ import { webhooksRouter } from './user/webhooks.route.js';
 import { publicCheckoutRouter } from './public-checkout.route.js';
 import { plansRouter } from './admin/plans.route.js';
 import { guestLeadsRouter } from './admin/guest-leads.route.js';
+import { contactRouter } from './admin/contact.route.js';
+import { webSettingsRouter } from './admin/web-settings.route.js';
 import { countriesRouter } from './countries.route.js';
 
 export const PUBLIC_PATHS = [
@@ -14,6 +16,9 @@ export const PUBLIC_PATHS = [
   '/health',
   '/public-checkout',
   '/countries',
+  '/plans/public',
+  '/contact/public',
+  '/web-settings',
 ];
 
 const router = Router();
@@ -26,6 +31,8 @@ router.use('/webhooks', webhooksRouter);
 router.use('/public-checkout', publicCheckoutRouter);
 router.use('/plans', plansRouter);
 router.use('/guest-leads', guestLeadsRouter);
+router.use('/contact', contactRouter);
+router.use('/web-settings', webSettingsRouter);
 router.use('/countries', countriesRouter);
 
 router.get('/health', (req, res) => {

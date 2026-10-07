@@ -45,6 +45,15 @@ export const listPlans = {
   }),
 };
 
+/**
+ * Public pricing-page list. Takes no parameters: eligibility is fixed at
+ * "active, non-custom plans sorted by price" so the marketing site cannot ask
+ * for inactive or admin-only plans.
+ */
+export const listPublicPlans = {
+  query: Joi.object().keys({}).unknown(false),
+};
+
 export const getPlan = {
   ...planIdParams,
 };

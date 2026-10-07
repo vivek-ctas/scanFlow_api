@@ -8,6 +8,8 @@ export const allRoles = {
     'manageSubscriptions',
     'viewSubscription',
     'manageGuestLeads',
+    'manageContact',
+    'manageWebSettings',
   ],
   ORGANIZATION_ADMIN: [
     'viewOperators',

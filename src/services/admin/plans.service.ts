@@ -115,6 +115,20 @@ export const listPlans = async (
   });
 };
 
+export const listPublicPlans = async () => {
+  const plans = await Plan.find({
+    status: 1,
+    is_custom_plan: false,
+  })
+    .select(
+      'name desc price price_quarterly billing_cycle currency trial_days features marketing_features is_popular discount',
+    )
+    .sort({ price: 1 });
+  return createResponse(httpStatus.OK, 'Plans fetched successfully.', {
+    plans,
+  });
+};
+
 export const getPlanById = async (planId: string) => {
   const plan = await Plan.findById(toObjectId(planId));
   if (!plan || plan.status === 2) {

@@ -43,6 +43,9 @@ const envVarsSchema = Joi.object()
     EMAIL_FROM: Joi.string()
       .allow('')
       .description('the from field in the emails sent by the app'),
+    EMAIL_CONTACT_RECIPIENT: Joi.string()
+      .allow('')
+      .description('recipient of contact-form notification emails'),
     CLIENT_URL: Joi.string().allow('').description('frontend origin'),
     BEHIND_REVERSE_PROXY: Joi.boolean()
       .default(false)
@@ -118,6 +121,7 @@ export const config = {
       },
     },
     from: envVars.EMAIL_FROM,
+    contactRecipient: envVars.EMAIL_CONTACT_RECIPIENT,
   },
   clientUrl: envVars.CLIENT_URL,
   behindReverseProxy: envVars.BEHIND_REVERSE_PROXY,
