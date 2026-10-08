@@ -9,6 +9,7 @@ import { plansRouter } from './admin/plans.route.js';
 import { guestLeadsRouter } from './admin/guest-leads.route.js';
 import { contactRouter } from './admin/contact.route.js';
 import { webSettingsRouter } from './admin/web-settings.route.js';
+import { emailRouter } from './admin/email.route.js';
 import { countriesRouter } from './countries.route.js';
 
 export const PUBLIC_PATHS = [
@@ -33,6 +34,7 @@ router.use('/plans', plansRouter);
 router.use('/guest-leads', guestLeadsRouter);
 router.use('/contact', contactRouter);
 router.use('/web-settings', webSettingsRouter);
+router.use('/email', emailRouter);
 router.use('/countries', countriesRouter);
 
 router.get('/health', (req, res) => {

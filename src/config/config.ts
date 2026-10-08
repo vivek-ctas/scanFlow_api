@@ -47,6 +47,14 @@ const envVarsSchema = Joi.object()
       .allow('')
       .description('recipient of contact-form notification emails'),
     CLIENT_URL: Joi.string().allow('').description('frontend origin'),
+    ADMIN_PANEL_URL: Joi.string()
+      .allow('')
+      .default('http://localhost:7052')
+      .description('admin panel origin used in subscription emails'),
+    SITE_URL: Joi.string()
+      .allow('')
+      .default('http://localhost:3001')
+      .description('marketing site origin used in subscription emails'),
     BEHIND_REVERSE_PROXY: Joi.boolean()
       .default(false)
       .description('trust X-Forwarded-* headers when behind a reverse proxy'),
@@ -124,6 +132,8 @@ export const config = {
     contactRecipient: envVars.EMAIL_CONTACT_RECIPIENT,
   },
   clientUrl: envVars.CLIENT_URL,
+  panelUrl: envVars.ADMIN_PANEL_URL,
+  siteUrl: envVars.SITE_URL,
   behindReverseProxy: envVars.BEHIND_REVERSE_PROXY,
   auth: {
     bypassEmail: envVars.BYPASS_EMAIL,
