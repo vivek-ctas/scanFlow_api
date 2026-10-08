@@ -28,5 +28,11 @@ router.post(
   authController.logout,
 );
 router.get('/me', auth(), authController.getMe);
+router.patch(
+  '/me',
+  auth(),
+  validate(authValidation.updateMe),
+  authController.updateMe,
+);
 
 export const authRouter = router;

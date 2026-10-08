@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import { catchAsync } from '../utils/catchAsync.js';
 import * as authService from '../services/auth.service.js';
+import * as profileService from '../services/user/profile.service.js';
 import { Request, Response } from 'express';
 
 export const sendOtp = catchAsync(async (req: Request, res: Response) => {
@@ -30,4 +31,12 @@ export const getMe = catchAsync(async (req: Request, res: Response) => {
     message: 'User profile fetched successfully.',
     data: { user: req.user },
   });
+});
+
+export const updateMe = catchAsync(async (req: Request, res: Response) => {
+  const result = await profileService.updateOwnProfile(
+    String((req.user as any)._id),
+    req.body,
+  );
+  res.status(result.status).json(result);
 });
