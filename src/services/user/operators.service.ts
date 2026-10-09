@@ -1,5 +1,6 @@
 import httpStatus from 'http-status';
-import { User } from '../../models/user.model.js';
+import mongoose from 'mongoose';
+import { User, Organization } from '../../models/index.js';
 import { ApiError } from '../../utils/ApiError.js';
 import {
   computeStatus,
@@ -10,8 +11,11 @@ import {
 } from '../common.service.js';
 import { ORGANIZATION_ASSIGNABLE_ROLES } from '../../config/roles.js';
 import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
+import { buildOperatorId } from '../../utils/operator-id.util.js';
 
 const OPERATOR_ROLES = ORGANIZATION_ASSIGNABLE_ROLES;
+const PIN_PATTERN = /^\d{6}$/;
+const MAX_OPERATOR_ID_ATTEMPTS = 5;
 
 const buildOperatorScope = (
   reqUser: any,
@@ -46,15 +50,35 @@ export const createOperator = async (
     userBody.organization_id,
     { required: true },
   )!;
-  const email = normalizeEmail(userBody.email);
-  if (await User.isEmailTaken(email)) {
+  const email = userBody.email ? normalizeEmail(userBody.email) : undefined;
+
+  if (role === 'OPERATOR') {
+    const pin = String(userBody.pin ?? '');
+    if (!PIN_PATTERN.test(pin)) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'A 6-digit PIN is required for OPERATOR role',
+      );
+    }
+  } else if (!email) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Email is required for ORGANIZATION_ADMIN role',
+    );
+  } else if (userBody.pin) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'PIN is only allowed for OPERATOR role',
+    );
+  }
+
+  if (email && (await User.isEmailTaken(email))) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
 
-  const user = await User.create({
+  const baseUser = {
     first_name: userBody.first_name,
     last_name: userBody.last_name,
-    email,
     contact_number: userBody.contact_number,
     business_address: userBody.business_address,
     role,
@@ -63,11 +87,48 @@ export const createOperator = async (
     is_email_verified: false,
     status: userBody.status ?? 1,
     created_by: reqUser._id,
-  });
+  };
 
-  return createResponse(httpStatus.CREATED, 'Operator created successfully.', {
-    user,
-  });
+  if (email) {
+    (baseUser as Record<string, any>).email = email;
+  }
+
+  let lastError: any;
+  for (let attempt = 0; attempt < MAX_OPERATOR_ID_ATTEMPTS; attempt += 1) {
+    let operatorId: string | undefined;
+    let pinHash: string | undefined;
+    if (role === 'OPERATOR') {
+      const org = await Organization.findById(organizationId);
+      operatorId = await buildOperatorId(org?.company_name, organizationId);
+      pinHash = String(userBody.pin);
+    }
+    try {
+      const user = await User.create({
+        ...baseUser,
+        operator_id: operatorId,
+        pin_hash: pinHash,
+      });
+      return createResponse(
+        httpStatus.CREATED,
+        'Operator created successfully.',
+        { user },
+      );
+    } catch (error: any) {
+      // Duplicate key -> operator_id collision across orgs with the same
+      // prefix; bump the per-org counter and retry.
+      if ((error as { code?: number })?.code !== 11000) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw (
+    lastError ||
+    new ApiError(
+      httpStatus.INTERNAL_SERVER_ERROR,
+      'Failed to allocate a unique Operator ID. Please retry.',
+    )
+  );
 };
 
 export const listOperators = async (
@@ -94,6 +155,7 @@ export const listOperators = async (
       { last_name: regex },
       { email: regex },
       { contact_number: regex },
+      { operator_id: regex },
     ];
   }
 
@@ -130,7 +192,6 @@ export const getOperatorById = async (
 const OPERATOR_UPDATE_KEYS = [
   'first_name',
   'last_name',
-  'email',
   'contact_number',
   'business_address',
   'role',
@@ -144,17 +205,60 @@ export const updateOperatorById = async (
   reqUser: any,
 ) => {
   const user = await getOperatorById(operatorId, reqUser);
-  if (
-    updateBody.email &&
-    (await User.isEmailTaken(updateBody.email, user._id as any))
-  ) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
-  }
-  if (updateBody.role && !OPERATOR_ROLES.includes(updateBody.role)) {
+
+  const nextRole = updateBody.role ?? user.role;
+  if (!OPERATOR_ROLES.includes(nextRole)) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
       'Operator role must be ORGANIZATION_ADMIN or OPERATOR',
     );
+  }
+
+  if ('email' in updateBody) {
+    const email = updateBody.email
+      ? normalizeEmail(updateBody.email)
+      : undefined;
+    if (nextRole !== 'OPERATOR' && !email) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Email is required for ORGANIZATION_ADMIN role',
+      );
+    }
+    if (email && (await User.isEmailTaken(email, user._id as any))) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
+    }
+    user.email = email ?? undefined;
+  }
+
+  if ('pin' in updateBody) {
+    if (nextRole !== 'OPERATOR') {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'PIN is only allowed for OPERATOR role',
+      );
+    }
+    if (!updateBody.pin) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'A 6-digit PIN is required for OPERATOR role',
+      );
+    }
+    user.pin_hash = String(updateBody.pin);
+    user.pin_attempt_count = 0;
+    user.pin_locked_until = null;
+  }
+
+  if (nextRole === 'OPERATOR' && !user.operator_id) {
+    const org = await Organization.findById(user.organization_id);
+    user.operator_id = await buildOperatorId(
+      org?.company_name,
+      user.organization_id as mongoose.Types.ObjectId,
+    );
+  }
+  if (nextRole !== 'OPERATOR') {
+    user.pin_hash = undefined;
+    user.pin_attempt_count = 0;
+    user.pin_locked_until = null;
   }
 
   OPERATOR_UPDATE_KEYS.forEach((key) => {

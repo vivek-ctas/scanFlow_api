@@ -4,7 +4,7 @@ import app from '../src/app.js';
 import { createOrg, createPlan, grant, activeUsed } from './helpers.js';
 import { generateAuthTokens } from '../src/services/token.service.js';
 import { createScan } from '../src/services/user/scans.service.js';
-import { Scan } from '../src/models/index.js';
+import { Scan, Subscription } from '../src/models/index.js';
 
 const makeUser = async (role: string, organizationId: string | null) => {
   const { createUser } = await import('./helpers.js');
@@ -130,5 +130,67 @@ describe('authorization & organization scope (§9/§10)', () => {
       .get('/api/plans')
       .set('authorization', `Bearer ${token}`);
     expect(res.status).toBe(403);
+  });
+
+  it('31. org admin can read their own subscription history only', async () => {
+    const own = await createOrg({ name: 'HistoryOwn' });
+    const other = await createOrg({ name: 'HistoryOther' });
+    const plan = await createPlan({ name: 'Gold', scan_limit: 25 });
+    const active = await grant(String(own._id), String(plan._id), {
+      trialDays: 0,
+    });
+    await Subscription.create({
+      organization_id: own._id,
+      plan_id: plan._id,
+      payment_id: active.payment_id,
+      features: [{ features_name: 'scan', scan_limit: 25 }],
+      billing_cycle: 'month',
+      status: 'cancelled',
+      started_at: new Date(),
+      expires_at: new Date(),
+      plan_price: plan.price,
+      plan_name: plan.name,
+      is_plan_cancel: true,
+      cancellation_reason: 'test reason',
+    });
+    const admin = await makeUser('ORGANIZATION_ADMIN', String(own._id));
+    const token = await tokenFor(admin);
+
+    const res = await request(app)
+      .get(`/api/organizations/${other._id}/subscriptions`)
+      .set('authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(String(res.body.data.organization_id)).toBe(String(own._id));
+    const statuses = res.body.data.subscriptions.map((s: any) => s.status);
+    expect(statuses).toContain('active');
+    expect(statuses).toContain('cancelled');
+    expect(res.body.data.subscriptions.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('32. invoice download is org-scoped (own 200 / cross-org 404)', async () => {
+    const own = await createOrg({ name: 'InvoiceOwn' });
+    const other = await createOrg({ name: 'InvoiceOther' });
+    const plan = await createPlan({ name: 'Gold', scan_limit: 25 });
+    const ownSub = await grant(String(own._id), String(plan._id), {
+      trialDays: 0,
+    });
+    const otherSub = await grant(String(other._id), String(plan._id), {
+      trialDays: 0,
+    });
+    const admin = await makeUser('ORGANIZATION_ADMIN', String(own._id));
+    const token = await tokenFor(admin);
+
+    const ownRes = await request(app)
+      .get(`/api/organizations/${own._id}/payments/${ownSub.payment_id}/invoice`)
+      .set('authorization', `Bearer ${token}`);
+    expect(ownRes.status).toBe(200);
+    expect(ownRes.headers['content-type']).toContain('application/pdf');
+
+    const crossRes = await request(app)
+      .get(
+        `/api/organizations/${own._id}/payments/${otherSub.payment_id}/invoice`,
+      )
+      .set('authorization', `Bearer ${token}`);
+    expect(crossRes.status).toBe(404);
   });
 });

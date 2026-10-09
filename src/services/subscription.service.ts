@@ -5,6 +5,7 @@ import { Plan } from '../models/plan.model.js';
 import {
   Subscription,
   ISubscription,
+  ISubscriptionFeature,
   SubscriptionStatus,
 } from '../models/subscription.model.js';
 import { Payment } from '../models/payment.model.js';
@@ -805,6 +806,64 @@ export const forceActivateSubscription = async (
   });
 };
 
+/**
+ * `usages` lists every feature snapshot on the active plan. 'scan' carries the
+ * live counter; the remaining features are metadata-only (0 used / N limit),
+ * matching the honest charting contract the panel already consumes.
+ */
+const buildUsageRows = (
+  features: ISubscriptionFeature[],
+  counterValue: number,
+  startedAt: Date,
+  expiresAt: Date,
+) =>
+  features.map((f) => ({
+    feature_name: f.features_name,
+    usage: f.features_name === 'scan' ? counterValue : 0,
+    scan_limit: f.scan_limit,
+    started_at: startedAt,
+    expires_at: expiresAt,
+  }));
+
+const buildUsagePayload = async (
+  organizationId: string,
+  active: ISubscription | null,
+) => {
+  if (!active) {
+    return {
+      period_count: 0,
+      scan_limit: 0,
+      quota_period: null as 'month' | 'quarterly' | null,
+      subscription_expires_at: null as Date | null,
+      usages: [] as {
+        feature_name: string;
+        usage: number;
+        scan_limit: number;
+        started_at: Date;
+        expires_at: Date;
+      }[],
+    };
+  }
+  const row = await Usage.findOne({
+    organization_id: toObjectId(organizationId),
+    subscription_id: active._id,
+  });
+  const cache = await readActiveSubUsage(organizationId, active as any);
+  const counter = cache?.used ?? row?.usage ?? 0;
+  return {
+    period_count: counter,
+    scan_limit: scanLimitOf(active.features),
+    quota_period: active.billing_cycle,
+    subscription_expires_at: active.expires_at,
+    usages: buildUsageRows(
+      active.features ?? [],
+      counter,
+      active.started_at,
+      active.expires_at,
+    ),
+  };
+};
+
 export const getSubscriptionSummary = async (
   organizationId: string,
 ): Promise<ReturnType<typeof createResponse>> => {
@@ -815,72 +874,58 @@ export const getSubscriptionSummary = async (
     .populate('plan_id')
     .sort({ queue_priority: 1 });
 
-  // Same shape as getOrganizationUsage so the panel has a single usage contract.
-  let usage: {
-    period_count: number;
-    scan_limit: number;
-    quota_period: 'month' | 'quarterly' | null;
-    subscription_expires_at: Date | null;
-  } = {
-    period_count: 0,
-    scan_limit: 0,
-    quota_period: null,
-    subscription_expires_at: null,
-  };
-  if (active) {
-    const row = await Usage.findOne({
-      organization_id: toObjectId(organizationId),
-      subscription_id: active._id,
-    });
-    const cache = await readActiveSubUsage(organizationId, active as any);
-    usage = {
-      period_count: cache?.used ?? row?.usage ?? 0,
-      scan_limit: scanLimitOf(active.features),
-      quota_period: active.billing_cycle,
-      subscription_expires_at: active.expires_at,
-    };
-  }
-
   return createResponse(httpStatus.OK, 'Subscription fetched successfully.', {
     activeSubscription: active ? toSubscriptionView(active) : null,
     futureQueue: futureQueue.map((sub) => toSubscriptionView(sub)),
-    usage,
+    usage: await buildUsagePayload(organizationId, active),
   });
 };
 
 export const getOrganizationUsage = async (organizationId: string) => {
   const active = await getActiveSubscription(organizationId);
-  if (!active) {
-    return createResponse(
-      httpStatus.OK,
-      'Organization usage fetched successfully.',
-      {
-        organization_id: organizationId,
-        usage: {
-          period_count: 0,
-          scan_limit: 0,
-          quota_period: null,
-          subscription_expires_at: null,
-        },
-      },
-    );
-  }
-  const usage = await Usage.findOne({
-    organization_id: toObjectId(organizationId),
-    subscription_id: active._id,
-  });
-  const cache = await readActiveSubUsage(organizationId, active as any);
   return createResponse(
     httpStatus.OK,
     'Organization usage fetched successfully.',
     {
       organization_id: organizationId,
-      usage: {
-        period_count: cache?.used ?? usage?.usage ?? 0,
-        scan_limit: scanLimitOf(active.features),
-        quota_period: active.billing_cycle,
-        subscription_expires_at: active.expires_at,
-      },
+      usage: await buildUsagePayload(organizationId, active),
     },
   );
+};
+
+/** Flattens a Payment row into the invoice/payment card attached to the ledger. */
+const toSubscriptionPaymentView = (payment: any) => {
+  if (!payment) return null;
+  return {
+    payment_id: String(payment._id),
+    invoice_number: payment.invoice_number ?? null,
+    gateway: payment.gateway ?? null,
+    status: payment.status ?? null,
+    amount: payment.price ?? 0,
+    currency_code: payment.currency_code ?? 'inr',
+    billing_cycle: payment.billing_cycle ?? null,
+    order_id: payment.order_id ?? null,
+    transaction_id: payment.transaction_id ?? null,
+    paid_at: payment.paid_at ?? null,
+    created_at: payment.created_at ?? null,
+  };
+};
+
+/** Full subscription ledger for an organization (all statuses, newest first). */
+export const listOrganizationSubscriptions = async (
+  organizationId: string,
+): Promise<ReturnType<typeof createResponse>> => {
+  const subscriptions = await Subscription.find({
+    organization_id: toObjectId(organizationId),
+  })
+    .populate('plan_id')
+    .populate('payment_id')
+    .sort({ created_at: -1 });
+  return createResponse(httpStatus.OK, 'Subscriptions fetched successfully.', {
+    organization_id: organizationId,
+    subscriptions: subscriptions.map((sub: any) => ({
+      ...toSubscriptionView(sub),
+      payment: toSubscriptionPaymentView(sub.payment_id),
+    })),
+  });
 };

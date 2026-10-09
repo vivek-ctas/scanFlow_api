@@ -71,7 +71,10 @@ describe('POST /api/operators (list scoping)', () => {
   it('scopes an organization admin to their own organization only', async () => {
     const orgA = await createOrg({ company_name: 'Org A' });
     const orgB = await createOrg({ company_name: 'Org B' });
-    const ownAdmin = await createUser('ORGANIZATION_ADMIN', orgA._id.toString());
+    const ownAdmin = await createUser(
+      'ORGANIZATION_ADMIN',
+      orgA._id.toString(),
+    );
     await createUser('OPERATOR', orgA._id.toString());
     await createUser('OPERATOR', orgB._id.toString());
 
@@ -186,7 +189,9 @@ describe('operator endpoints reject super-admin targets', () => {
       .send({
         first_name: 'New',
         last_name: 'Op',
+        role: 'OPERATOR',
         email: 'new-op@example.com',
+        pin: '123456',
         organization_id: org._id.toString(),
       });
     expect(created.status).toBe(201);
@@ -195,6 +200,8 @@ describe('operator endpoints reject super-admin targets', () => {
 
     expect(res.body.data.total_results).toBe(1);
     expect(res.body.data.results[0].email).toBe('new-op@example.com');
+    // Operator ID is generated from the org company name + per-org counter.
+    expect(res.body.data.results[0].operator_id).toBe('OR1001');
   });
 
   it('requires an organization when a super admin creates an operator', async () => {
@@ -204,7 +211,11 @@ describe('operator endpoints reject super-admin targets', () => {
     const res = await request(app)
       .post('/api/operators')
       .set('authorization', `Bearer ${token}`)
-      .send({ first_name: 'No', last_name: 'Org', email: 'no-org@example.com' });
+      .send({
+        first_name: 'No',
+        last_name: 'Org',
+        email: 'no-org@example.com',
+      });
 
     expect(res.status).toBe(400);
   });

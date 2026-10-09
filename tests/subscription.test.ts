@@ -187,6 +187,15 @@ describe('subscription lifecycle (§3 + §8)', () => {
       scan_limit: 5,
       quota_period: 'month',
       subscription_expires_at: body.activeSubscription.expires_at,
+      usages: [
+        {
+          feature_name: 'scan',
+          usage: 0,
+          scan_limit: 5,
+          started_at: body.activeSubscription.started_at,
+          expires_at: body.activeSubscription.expires_at,
+        },
+      ],
     });
   });
 

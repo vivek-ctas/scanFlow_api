@@ -15,6 +15,12 @@ export const verifyOtp = catchAsync(async (req: Request, res: Response) => {
   res.status(result.status).json(result);
 });
 
+export const loginWithPin = catchAsync(async (req: Request, res: Response) => {
+  const { operator_id, pin } = req.body;
+  const result = await authService.loginWithPin(operator_id, pin);
+  res.status(result.status).json(result);
+});
+
 export const refreshTokens = catchAsync(async (req: Request, res: Response) => {
   const result = await authService.refreshAuth(req.body.refresh_token);
   res.status(result.status).json(result);
