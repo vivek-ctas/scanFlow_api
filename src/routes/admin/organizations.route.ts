@@ -60,6 +60,20 @@ router.get(
   subscriptionController.getSubscription,
 );
 
+router.get(
+  '/:organizationId/subscriptions',
+  auth('viewSubscription'),
+  validate(subscriptionValidation.getSubscriptions),
+  subscriptionController.getSubscriptions,
+);
+
+router.get(
+  '/:organizationId/payments/:paymentId/invoice',
+  auth('viewSubscription'),
+  validate(subscriptionValidation.getInvoice),
+  subscriptionController.downloadInvoice,
+);
+
 router.post(
   '/:organizationId/subscription/assign-plan',
   auth('manageSubscriptions'),
