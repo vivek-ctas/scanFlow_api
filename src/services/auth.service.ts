@@ -12,8 +12,13 @@ import * as tokenService from './token.service.js';
 import * as emailService from './email.service.js';
 
 const OTP_EXPIRY_MINUTES = 5;
+const PIN_MAX_ATTEMPTS = 5;
+const PIN_LOCKOUT_MINUTES = 15;
 
 const isBypassEnabled = () => config.env !== 'production';
+
+const OPERATOR_LOGIN_HINT =
+  'Operators must sign in with their Operator ID and PIN.';
 
 export const sendOtp = async (email: string) => {
   const normalizedEmail = normalizeEmail(email);
@@ -26,6 +31,9 @@ export const sendOtp = async (email: string) => {
   }
   if (user.status === 0) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Account is inactive');
+  }
+  if (user.role === 'OPERATOR') {
+    throw new ApiError(httpStatus.BAD_REQUEST, OPERATOR_LOGIN_HINT);
   }
 
   if (
@@ -114,6 +122,9 @@ export const verifyOtpAndLogin = async (email: string, otp: string) => {
   if (user.status === 0) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Account is inactive');
   }
+  if (user.role === 'OPERATOR') {
+    throw new ApiError(httpStatus.BAD_REQUEST, OPERATOR_LOGIN_HINT);
+  }
 
   const tokens = await tokenService.generateAuthTokens(user);
 
@@ -125,6 +136,78 @@ export const verifyOtpAndLogin = async (email: string, otp: string) => {
       user,
     },
   );
+};
+
+export const loginWithPin = async (operatorId: string, pin: string) => {
+  const normalizedId = String(operatorId ?? '')
+    .trim()
+    .toUpperCase();
+
+  const user = await User.findOne({
+    operator_id: normalizedId,
+    status: { $ne: 2 },
+  });
+
+  // Dummy comparison so unknown ids cost the same as wrong pins
+  // (anti-enumeration: attackers cannot tell if an Operator ID exists).
+  if (!user) {
+    await bcrypt.hash(String(pin ?? ''), 8);
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid Operator ID or PIN.');
+  }
+  if (user.status === 0) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Account is inactive');
+  }
+
+  const now = Date.now();
+  if (
+    user.pin_locked_until &&
+    now < new Date(user.pin_locked_until).getTime()
+  ) {
+    const minutes = Math.ceil(
+      (new Date(user.pin_locked_until).getTime() - now) / 60000,
+    );
+    throw new ApiError(
+      httpStatus.TOO_MANY_REQUESTS,
+      `Too many attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+    );
+  }
+
+  const isMatch = await user.isPinMatch(String(pin ?? ''));
+  if (isMatch) {
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { pin_attempt_count: 0, pin_locked_until: null } },
+    );
+    const tokens = await tokenService.generateAuthTokens(user);
+    return createResponse(httpStatus.OK, 'Operator logged in successfully.', {
+      tokens,
+      user,
+    });
+  }
+
+  const updated = await User.findOneAndUpdate(
+    { _id: user._id },
+    { $inc: { pin_attempt_count: 1 } },
+    { returnDocument: 'after' },
+  );
+
+  if ((updated?.pin_attempt_count ?? 0) >= PIN_MAX_ATTEMPTS) {
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          pin_locked_until: new Date(now + PIN_LOCKOUT_MINUTES * 60000),
+          pin_attempt_count: 0,
+        },
+      },
+    );
+    throw new ApiError(
+      httpStatus.TOO_MANY_REQUESTS,
+      'Too many attempts. Operator ID locked for 15 minutes.',
+    );
+  }
+
+  throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid Operator ID or PIN.');
 };
 
 export const refreshAuth = async (refreshToken: string) => {

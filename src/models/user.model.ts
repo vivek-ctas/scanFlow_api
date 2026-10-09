@@ -8,7 +8,7 @@ import { paginate } from './plugins/paginate.plugin.js';
 export interface IUser extends Document {
   first_name: string;
   last_name: string;
-  email: string;
+  email?: string | null;
   contact_number?: string;
   country_name?: string;
   company_name?: string;
@@ -20,11 +20,16 @@ export interface IUser extends Document {
   is_email_verified: boolean;
   status: number;
   avatar?: string;
+  operator_id?: string;
+  pin_hash?: string;
+  pin_attempt_count: number;
+  pin_locked_until?: Date | null;
   created_by?: mongoose.Types.ObjectId | null;
   modified_by?: mongoose.Types.ObjectId | null;
   created_at: Date;
   updated_at: Date;
   isPasswordMatch(password: string): Promise<boolean>;
+  isPinMatch(pin: string): Promise<boolean>;
 }
 
 interface IUserModel extends Model<IUser> {
@@ -44,8 +49,9 @@ const userSchema = new Schema<IUser, IUserModel>(
     last_name: { type: String, required: true, trim: true },
     email: {
       type: String,
-      required: true,
-      unique: true,
+      required: function (this: IUser) {
+        return this.role !== 'OPERATOR';
+      },
       trim: true,
       lowercase: true,
       validate: {
@@ -69,6 +75,10 @@ const userSchema = new Schema<IUser, IUserModel>(
         message: 'Password must contain at least one letter and one number',
       },
     },
+    operator_id: { type: String, trim: true, uppercase: true },
+    pin_hash: { type: String, private: true },
+    pin_attempt_count: { type: Number, default: 0, private: true },
+    pin_locked_until: { type: Date, default: null, private: true },
     role: { type: String, enum: roles, default: 'OPERATOR' },
     is_super_admin: { type: Boolean, default: false },
     organization_id: {
@@ -88,6 +98,9 @@ const userSchema = new Schema<IUser, IUserModel>(
 userSchema.plugin(toJSON);
 userSchema.plugin(paginate);
 
+userSchema.index({ email: 1 }, { unique: true, sparse: true });
+userSchema.index({ operator_id: 1 }, { unique: true, sparse: true });
+
 userSchema.statics.isEmailTaken = async function (
   email: string,
   excludeUserId?: mongoose.Types.ObjectId,
@@ -102,10 +115,19 @@ userSchema.methods.isPasswordMatch = async function (
   return bcrypt.compare(password, this.get('password') as string);
 };
 
+userSchema.methods.isPinMatch = async function (pin: string): Promise<boolean> {
+  const hash = this.get('pin_hash');
+  if (!hash) return false;
+  return bcrypt.compare(pin, hash as string);
+};
+
 // Use any for middleware to avoid Mongoose 8 type issues
 (userSchema as any).pre('save', async function (this: IUser) {
   if (this.isModified('password') && this.get('password')) {
     this.set('password', bcrypt.hashSync(this.get('password') as string, 8));
+  }
+  if (this.isModified('pin_hash') && this.get('pin_hash')) {
+    this.set('pin_hash', bcrypt.hashSync(this.get('pin_hash') as string, 8));
   }
 });
 
