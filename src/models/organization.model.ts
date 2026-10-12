@@ -8,6 +8,7 @@ export interface IOrganization extends Document {
   contact_number?: string;
   country_name?: string;
   status: number;
+  operator_seq: number;
   created_by?: mongoose.Types.ObjectId | null;
   modified_by?: mongoose.Types.ObjectId | null;
   created_at: Date;
@@ -28,6 +29,7 @@ const organizationSchema = new Schema<IOrganization, IOrganizationModel>(
     contact_number: { type: String, trim: true },
     country_name: { type: String, trim: true },
     status: { type: Number, default: 1 },
+    operator_seq: { type: Number, default: 1000 },
     created_by: { type: Schema.Types.ObjectId, index: true, default: null },
     modified_by: { type: Schema.Types.ObjectId, index: true, default: null },
   },

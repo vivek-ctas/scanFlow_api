@@ -18,10 +18,39 @@ import {
 
 let connected = false;
 
+/**
+ * The test database is reused between runs, so the legacy non-sparse `email_1`
+ * unique index (from before operators could skip email) may still exist.
+ * Drop non-sparse copies and rebuild all indexes from the current schema so
+ * operators without email and duplicate operator_ids behave as modelled.
+ */
+const ensureUserIndexes = async (): Promise<void> => {
+  const col = User.collection;
+  // Ensure the collection exists before inspecting indexes (lazy-created).
+  try {
+    await col.createIndex({ _id: 1 });
+  } catch {
+    // already exists
+  }
+  const current = await col.indexes();
+  for (const idx of current) {
+    if (idx.name === 'email_1' && !(idx as Record<string, any>).sparse) {
+      try {
+        await col.dropIndex('email_1');
+        console.warn('[tests] dropped legacy non-sparse email_1 index');
+      } catch {
+        // already gone
+      }
+    }
+  }
+  await User.syncIndexes();
+};
+
 export const connectDb = async (): Promise<void> => {
   if (mongoose.connection.readyState === 0) {
     await mongoose.connect(config.mongoose.url);
   }
+  await ensureUserIndexes();
   connected = true;
 };
 
@@ -152,6 +181,30 @@ export const createAdminUser = async (overrides: Record<string, any> = {}) => {
     ...overrides,
   });
   return user;
+};
+
+/**
+ * Creates an OPERATOR with a usable Operator ID + PIN for pin-login tests.
+ * Email is intentionally omitted (operators no longer require one).
+ * The PIN is passed in plain text: the schema pre-save hook hashes it once.
+ */
+export const createOperator = async (
+  organizationId: string,
+  overrides: Record<string, any> = {},
+) => {
+  const { pin, ...rest } = overrides;
+  const operator = await User.create({
+    first_name: 'Op',
+    last_name: 'User',
+    role: 'OPERATOR',
+    is_super_admin: false,
+    organization_id: organizationId,
+    status: 1,
+    operator_id: rest.operator_id ?? `XX${Date.now()}`,
+    pin_hash: String(pin ?? '123456'),
+    ...rest,
+  });
+  return operator;
 };
 
 export const grant = async (

@@ -14,7 +14,10 @@ export const createOperator = {
   body: Joi.object().keys({
     first_name: Joi.string().required(),
     last_name: Joi.string().required(),
-    email: Joi.string().required().email(),
+    email: Joi.string().email().allow('', null).optional(),
+    pin: Joi.string()
+      .pattern(/^\d{6}$/)
+      .optional(),
     contact_number: Joi.string().allow('', null).optional(),
     business_address: Joi.string().allow('', null).optional(),
     role: Joi.string()
@@ -53,7 +56,10 @@ export const updateOperator = {
     .keys({
       first_name: Joi.string().optional(),
       last_name: Joi.string().optional(),
-      email: Joi.string().email().optional(),
+      email: Joi.string().email().allow('', null).optional(),
+      pin: Joi.string()
+        .pattern(/^\d{6}$/)
+        .optional(),
       contact_number: Joi.string().allow('', null).optional(),
       business_address: Joi.string().allow('', null).optional(),
       role: Joi.string()

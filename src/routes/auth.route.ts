@@ -17,6 +17,11 @@ router.post(
   authController.verifyOtp,
 );
 router.post(
+  '/login-pin',
+  validate(authValidation.loginPin),
+  authController.loginWithPin,
+);
+router.post(
   '/refresh-tokens',
   validate(authValidation.refreshTokens),
   authController.refreshTokens,

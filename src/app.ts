@@ -10,7 +10,7 @@ import {
   errorHandler as morganErrorHandler,
 } from './config/morgan.js';
 import { jwtStrategy } from './config/passport.js';
-import { authLimiter } from './middlewares/rateLimiter.js';
+import { authLimiter, operatorPinLimiter } from './middlewares/rateLimiter.js';
 import { mongoSanitize } from './middlewares/mongoSanitize.js';
 import { auth } from './middlewares/auth.js';
 import { apiRouter, PUBLIC_PATHS } from './routes/index.js';
@@ -65,6 +65,7 @@ passport.use('jwt', jwtStrategy);
 
 if (config.env === 'production') {
   app.use('/api/auth', authLimiter);
+  app.use('/api/auth/login-pin', operatorPinLimiter);
 }
 
 app.use('/api', (req, res, next) => {

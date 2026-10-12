@@ -13,6 +13,19 @@ export const verifyOtp = {
   }),
 };
 
+export const loginPin = {
+  body: Joi.object().keys({
+    operator_id: Joi.string()
+      .trim()
+      .uppercase()
+      .pattern(/^[A-Z0-9]{2}\d+$/)
+      .required(),
+    pin: Joi.string()
+      .pattern(/^\d{6}$/)
+      .required(),
+  }),
+};
+
 export const refreshTokens = {
   body: Joi.object().keys({
     refresh_token: Joi.string().required(),

@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import { catchAsync } from '../../utils/catchAsync.js';
 import * as subscriptionService from '../../services/subscription.service.js';
+import { getInvoicePdf } from '../../services/invoice.service.js';
 import { dispatchSubscriptionGrantEmails } from '../../services/subscription-email.service.js';
 import { createResponse } from '../../services/common.service.js';
 import { Request, Response } from 'express';
@@ -29,6 +30,31 @@ export const getOrganizationUsage = catchAsync(
     const result =
       await subscriptionService.getOrganizationUsage(organizationId);
     res.status(result.status).json(result);
+  },
+);
+
+export const getSubscriptions = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const result =
+      await subscriptionService.listOrganizationSubscriptions(organizationId);
+    res.status(result.status).json(result);
+  },
+);
+
+export const downloadInvoice = catchAsync(
+  async (req: Request, res: Response) => {
+    const organizationId = await resolveOrgAndAssert(req);
+    const { buffer, invoice_number } = await getInvoicePdf(
+      organizationId,
+      String(req.params.paymentId),
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="Invoice_${invoice_number}.pdf"`,
+    );
+    res.send(buffer);
   },
 );
 

@@ -15,8 +15,19 @@ export const getSubscription = {
   ...subscriptionParams,
 };
 
+export const getSubscriptions = {
+  ...subscriptionParams,
+};
+
 export const getOrganizationUsage = {
   ...subscriptionParams,
+};
+
+export const getInvoice = {
+  params: Joi.object().keys({
+    organizationId: Joi.string().custom(objectId).required(),
+    paymentId: Joi.string().custom(objectId).required(),
+  }),
 };
 
 export const assignPlan = {

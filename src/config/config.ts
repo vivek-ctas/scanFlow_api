@@ -104,11 +104,26 @@ if (error) {
   throw new Error(`Config validation error: ${error.message}`);
 }
 
+/**
+ * Appends '-test' to the database name of a Mongo URI, preserving any
+ * query string (`?authSource=...`, `?readPreference=...`). Naively appending
+ * to the whole string would corrupt the query and break authentication.
+ */
+const withTestDbSuffix = (url: string): string => {
+  const queryIndex = url.indexOf('?');
+  const base = queryIndex === -1 ? url : url.slice(0, queryIndex);
+  const query = queryIndex === -1 ? '' : url.slice(queryIndex);
+  return `${base}-test${query}`;
+};
+
 export const config = {
   env: envVars.NODE_ENV,
   port: envVars.PORT,
   mongoose: {
-    url: envVars.MONGODB_URL + (envVars.NODE_ENV === 'test' ? '-test' : ''),
+    url:
+      envVars.NODE_ENV === 'test'
+        ? withTestDbSuffix(envVars.MONGODB_URL)
+        : envVars.MONGODB_URL,
     options: {},
   },
   jwt: {
