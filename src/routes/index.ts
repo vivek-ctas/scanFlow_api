@@ -11,6 +11,7 @@ import { contactRouter } from './admin/contact.route.js';
 import { webSettingsRouter } from './admin/web-settings.route.js';
 import { emailRouter } from './admin/email.route.js';
 import { countriesRouter } from './countries.route.js';
+import { dashboardRouter } from './admin/dashboard.route.js';
 
 export const PUBLIC_PATHS = [
   '/auth',
@@ -36,6 +37,7 @@ router.use('/contact', contactRouter);
 router.use('/web-settings', webSettingsRouter);
 router.use('/email', emailRouter);
 router.use('/countries', countriesRouter);
+router.use('/dashboard', dashboardRouter);
 
 router.get('/health', (req, res) => {
   res.status(200).json({

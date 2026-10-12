@@ -10,6 +10,7 @@ export const allRoles = {
     'manageGuestLeads',
     'manageContact',
     'manageWebSettings',
+    'viewDashboard',
   ],
   ORGANIZATION_ADMIN: [
     'viewOperators',

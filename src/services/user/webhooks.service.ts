@@ -85,7 +85,11 @@ export const listWebhookDeliveries = async (
     query.status = filter.status;
   }
 
-  const deliveries = await (WebhookDelivery as any).paginate(query, options);
+  const deliveries = await (WebhookDelivery as any).paginate(query, {
+    sortBy: options.sort_by ?? 'created_at:desc',
+    limit: options.limit,
+    page: options.page,
+  });
   return createResponse(
     httpStatus.OK,
     'Webhook deliveries fetched successfully.',
