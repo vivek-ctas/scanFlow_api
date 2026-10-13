@@ -893,6 +893,62 @@ export const getOrganizationUsage = async (organizationId: string) => {
   );
 };
 
+/**
+ * Daily scan-activity trend for the active subscription's billing window.
+ * Each `tbl_scan` row carries a `scanned_at` timestamp, so a genuine
+ * time-series is aggregated by day. `used`/`scan_limit` reuse the same
+ * counter as `getOrganizationUsage` so the gauge and the chart stay in sync.
+ */
+export const getUsageTrend = async (organizationId: string) => {
+  const active = await getActiveSubscription(organizationId);
+
+  if (!active) {
+    return createResponse(httpStatus.OK, 'Usage trend fetched successfully.', {
+      organization_id: organizationId,
+      used: 0,
+      scan_limit: 0,
+      started_at: null,
+      expires_at: null,
+      points: [],
+    });
+  }
+
+  const payload = await buildUsagePayload(organizationId, active);
+
+  const rows = await Scan.aggregate([
+    {
+      $match: {
+        organization_id: toObjectId(organizationId),
+        scanned_at: { $gte: active.started_at, $lt: active.expires_at },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: '%Y-%m-%d', date: '$scanned_at' } },
+        },
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { '_id.date': 1 } },
+  ]);
+
+  let running = 0;
+  const points = rows.map((row: any) => {
+    running += row.count;
+    return { date: row._id.date, count: row.count, cumulative: running };
+  });
+
+  return createResponse(httpStatus.OK, 'Usage trend fetched successfully.', {
+    organization_id: organizationId,
+    used: payload.period_count,
+    scan_limit: payload.scan_limit,
+    started_at: active.started_at,
+    expires_at: active.expires_at,
+    points,
+  });
+};
+
 /** Flattens a Payment row into the invoice/payment card attached to the ledger. */
 const toSubscriptionPaymentView = (payment: any) => {
   if (!payment) return null;
