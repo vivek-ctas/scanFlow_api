@@ -23,6 +23,8 @@ const systemErrorSchema = new Schema<ISystemError>(
   },
 );
 
+systemErrorSchema.index({ createdAt: 1 });
+
 systemErrorSchema.plugin(toJSON);
 
 export const SystemError = mongoose.model<ISystemError>(

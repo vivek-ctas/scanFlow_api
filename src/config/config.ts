@@ -82,6 +82,21 @@ const envVarsSchema = Joi.object()
     WEBHOOK_RETRY_LIMIT: Joi.number()
       .default(3)
       .description('webhook delivery retry attempts'),
+    DASHBOARD_TIMEZONE: Joi.string()
+      .default('Asia/Kolkata')
+      .description('IANA timezone used for dashboard day/month boundaries'),
+    DASHBOARD_QUERY_MAX_MS: Joi.number()
+      .default(5000)
+      .description('max ms a dashboard aggregation may run'),
+    DASHBOARD_NEAR_LIMIT_PCT: Joi.number()
+      .default(90)
+      .description('utilization % at which a quota is flagged near-limit'),
+    DASHBOARD_CACHE_FRESH_SECONDS: Joi.number()
+      .default(60)
+      .description('freshness window for cheap dashboard widgets'),
+    DASHBOARD_CHART_CACHE_SECONDS: Joi.number()
+      .default(300)
+      .description('freshness window for dashboard chart widgets'),
     STRIPE_SECRET_KEY: Joi.string().allow('').description('Stripe secret key'),
     STRIPE_WEBHOOK_SECRET: Joi.string()
       .allow('')
@@ -163,6 +178,13 @@ export const config = {
     batchSize: envVars.WEBHOOK_BATCH_SIZE,
     batchDebounceMs: envVars.WEBHOOK_BATCH_DEBOUNCE_MS,
     retryLimit: envVars.WEBHOOK_RETRY_LIMIT,
+  },
+  dashboard: {
+    timezone: envVars.DASHBOARD_TIMEZONE,
+    queryMaxMs: envVars.DASHBOARD_QUERY_MAX_MS,
+    nearLimitPct: envVars.DASHBOARD_NEAR_LIMIT_PCT,
+    cacheFreshSeconds: envVars.DASHBOARD_CACHE_FRESH_SECONDS,
+    chartCacheSeconds: envVars.DASHBOARD_CHART_CACHE_SECONDS,
   },
   stripe: {
     secretKey: envVars.STRIPE_SECRET_KEY,

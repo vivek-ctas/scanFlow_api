@@ -9,6 +9,7 @@ import {
 } from './queues/webhook.worker.js';
 import { reconcileScanUsage } from './services/quota.service.js';
 import { normalizeAllQueuePriorities } from './services/subscription.service.js';
+import { getRedis, isRedisConfigured } from './queues/redis.js';
 import {
   runSubscriptionExpiryJob,
   runSubscriptionReminderJob,
@@ -27,6 +28,19 @@ const reconcile = async () => {
     logger.info(`[RECONCILE] updated ${results.length} organizations`);
   } catch (err: any) {
     logger.error(`[RECONCILE] failed: ${err.message}`);
+  }
+  await writeHeartbeat();
+};
+
+/** Dashboard liveness signal read by the API's /dashboard/system endpoint. */
+const writeHeartbeat = async () => {
+  if (!isRedisConfigured()) {
+    return;
+  }
+  try {
+    await getRedis().set('worker:heartbeat', String(Date.now()), 'EX', 90);
+  } catch (err: any) {
+    logger.error(`[HEARTBEAT] failed: ${err.message}`);
   }
 };
 
