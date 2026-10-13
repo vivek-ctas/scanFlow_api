@@ -3,7 +3,11 @@ import config from './config.js';
 
 const enumerateErrorFormat = winston.format((info) => {
   if (info instanceof Error) {
-    Object.assign(info, { message: info.stack });
+    // Return a copy — never mutate the original Error (logging must have no
+    // side effects; mutating `message` to the stack corrupts downstream use).
+    return Object.assign(Object.create(Object.getPrototypeOf(info)), info, {
+      message: info.stack,
+    });
   }
   return info;
 });

@@ -480,11 +480,53 @@ export const getAttention = async () => {
       status: 'TXN_SUCCESS',
       $or: [{ organization_id: null }, { organization_id: { $exists: false } }],
     })
-      .select('gateway price currency_code paid_at organization_id lead_id')
+      .select(
+        'gateway price currency_code paid_at organization_id plan_id lead_id',
+      )
       .lean(),
     Subscription.distinct('organization_id', { status: 'future' }),
   ]);
   const queuedSet = new Set(queuedOrgIds.map((id: any) => String(id)));
+
+  const planIds = [
+    ...new Set(
+      paidNotProvisioned
+        .map((payment) => payment.plan_id)
+        .filter(Boolean)
+        .map((id: any) => String(id)),
+    ),
+  ];
+  const leadIds = [
+    ...new Set(
+      paidNotProvisioned
+        .map((payment) => payment.lead_id)
+        .filter(Boolean)
+        .map((id: any) => String(id)),
+    ),
+  ];
+  const [paidPlans, paidLeads] = await Promise.all([
+    planIds.length
+      ? Plan.find({ _id: { $in: planIds } })
+          .select('name')
+          .lean()
+      : Promise.resolve([]),
+    leadIds.length
+      ? GuestLead.find({ _id: { $in: leadIds } })
+          .select('first_name last_name company_name')
+          .lean()
+      : Promise.resolve([]),
+  ]);
+  const planNameById = new Map(
+    paidPlans.map((plan) => [String(plan._id), plan.name]),
+  );
+  const leadNameById = new Map(
+    paidLeads.map((lead) => [
+      String(lead._id),
+      [lead.first_name, lead.last_name].filter(Boolean).join(' ') ||
+        lead.company_name ||
+        null,
+    ]),
+  );
 
   const names = await organizationNameMap([
     ...quotaExhausted.map((r) => r.organizationId),
@@ -516,6 +558,13 @@ export const getAttention = async () => {
       price: payment.price,
       currency_code: payment.currency_code,
       paid_at: payment.paid_at ?? null,
+      plan_name: payment.plan_id
+        ? (planNameById.get(String(payment.plan_id)) ?? null)
+        : null,
+      lead_id: payment.lead_id ? String(payment.lead_id) : null,
+      lead_name: payment.lead_id
+        ? (leadNameById.get(String(payment.lead_id)) ?? null)
+        : null,
     })),
   };
 };
@@ -564,9 +613,9 @@ export const getWebhooks = async () => {
   };
 };
 
-type Health = 'healthy' | 'degraded' | 'unavailable';
+export type Health = 'healthy' | 'degraded' | 'unavailable';
 
-const healthFromAge = (
+export const healthFromAge = (
   ageMs: number | null,
   healthyMax: number,
   degradedMax: number,
@@ -631,7 +680,9 @@ export const getSystem = async () => {
     ? healthFromAge(oldestAgeMs, 120_000, 600_000)
     : 'unavailable';
 
-  const errors = await SystemError.find()
+  const errors = await SystemError.find({
+    $or: [{ status_code: { $gte: 400 } }, { status_code: null }],
+  })
     .sort({ createdAt: -1 })
     .limit(10)
     .lean();
@@ -650,7 +701,9 @@ export const getSystem = async () => {
     recent_errors: errors.map((error: any) => ({
       id: String(error._id),
       created_at: error.createdAt,
-      action_type: error.action_type ?? null,
+      method: error.method ?? null,
+      route: error.route ?? null,
+      status_code: error.status_code ?? null,
       summary: scrubErrorSummary(error.error_data),
     })),
     metrics_unavailable: ['api_latency', 'api_error_rate'],

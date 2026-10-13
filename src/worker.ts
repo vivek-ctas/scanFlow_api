@@ -21,6 +21,7 @@ let activationTimer: NodeJS.Timeout | null = null;
 let reminderTimer: NodeJS.Timeout | null = null;
 let purgeTimer: NodeJS.Timeout | null = null;
 let webhookBatchTimer: NodeJS.Timeout | null = null;
+let heartbeatTimer: NodeJS.Timeout | null = null;
 
 const reconcile = async () => {
   try {
@@ -29,7 +30,6 @@ const reconcile = async () => {
   } catch (err: any) {
     logger.error(`[RECONCILE] failed: ${err.message}`);
   }
-  await writeHeartbeat();
 };
 
 /** Dashboard liveness signal read by the API's /dashboard/system endpoint. */
@@ -74,6 +74,11 @@ const start = async () => {
   worker = await startWebhookWorker();
   logger.info('Webhook worker ready');
 
+  // Signal liveness immediately and independently of the reconcile loop, so a
+  // slow or hung maintenance pass can never suppress the dashboard heartbeat.
+  await writeHeartbeat();
+  heartbeatTimer = setInterval(writeHeartbeat, 30_000);
+
   // Boot maintenance (§12): repack queue priorities, then run an activation +
   // reconciliation pass before the periodic loops take over.
   await normalizeAllQueuePriorities();
@@ -109,6 +114,9 @@ const shutdown = async () => {
   }
   if (webhookBatchTimer) {
     clearInterval(webhookBatchTimer);
+  }
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
   }
   if (worker) {
     await worker.close();

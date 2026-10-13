@@ -14,7 +14,7 @@ import { getRedis, isRedisConfigured } from '../../queues/redis.js';
  * stampedes the database.
  */
 
-const KEY_PREFIX = 'dash:v1';
+const KEY_PREFIX = 'dash:v2';
 
 export interface WidgetCacheOptions {
   freshSeconds?: number;
