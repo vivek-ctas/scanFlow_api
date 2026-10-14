@@ -53,7 +53,16 @@ interface ActiveUsageRow {
 }
 
 const loadActiveUsage = async (): Promise<ActiveUsageRow[]> => {
-  const actives = await Subscription.find({ status: 'active' })
+  // A soft-deleted org keeps its subscription, so active subs must be filtered
+  // against org status here or deleted orgs leak into `/attention` and
+  // `/top-organizations` (§3: soft-deleted orgs are excluded everywhere).
+  const deletedOrgIds = await Organization.distinct('_id', { status: 2 });
+  const actives = await Subscription.find({
+    status: 'active',
+    ...(deletedOrgIds.length
+      ? { organization_id: { $nin: deletedOrgIds } }
+      : {}),
+  })
     .select(
       'organization_id plan_name billing_cycle started_at expires_at features',
     )
@@ -123,7 +132,7 @@ export const getSummary = async () => {
       { $match: { status: 'active' } },
       {
         $lookup: {
-          from: 'tbl_payment',
+          from: Payment.collection.name,
           localField: 'payment_id',
           foreignField: '_id',
           as: 'payment',
@@ -306,13 +315,12 @@ export const getScanTrend = async (options: {
 };
 
 export const getPlanDistribution = async () => {
-  const [grouped, orgTotal, orgsWithActive] = await Promise.all([
+  const [grouped, activeOrgIds] = await Promise.all([
     Subscription.aggregate([
       { $match: { status: 'active' } },
       { $group: { _id: '$plan_id', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
+      { $sort: { count: -1, _id: 1 } },
     ]).option({ maxTimeMS: maxMs() }),
-    Organization.countDocuments({ status: { $ne: 2 } }),
     Subscription.distinct('organization_id', { status: 'active' }),
   ]);
 
@@ -334,9 +342,18 @@ export const getPlanDistribution = async () => {
     count: row.count as number,
   }));
 
+  // Count live (non-deleted) orgs with no active subscription directly, rather
+  // than subtracting the active-org set: a soft-deleted org can still own an
+  // active subscription (`deleteOrganizationById` only flips `status`), which
+  // would otherwise inflate the active set and undercount the no-plan badge.
+  const noPlan = await Organization.countDocuments({
+    status: { $ne: 2 },
+    _id: { $nin: activeOrgIds.filter(Boolean) },
+  });
+
   return {
     results,
-    no_plan: Math.max(0, orgTotal - orgsWithActive.length),
+    no_plan: noPlan,
   };
 };
 
@@ -737,9 +754,14 @@ export const getSystem = async () => {
   const oldestAgeMs = oldest
     ? now.getTime() - oldest.created_at.getTime()
     : null;
-  const webhookQueue: Health = isRedisConfigured()
-    ? healthFromAge(oldestAgeMs, 120_000, 600_000)
-    : 'unavailable';
+  // No pending delivery means the queue is idle, not unreachable. Passing a
+  // null age to `healthFromAge` would wrongly return `unavailable`, so an idle
+  // queue is reported healthy (mirrors `/webhooks`, where no pending == healthy).
+  const webhookQueue: Health = !isRedisConfigured()
+    ? 'unavailable'
+    : oldestAgeMs === null
+      ? 'healthy'
+      : healthFromAge(oldestAgeMs, 120_000, 600_000);
 
   const errors = await SystemError.find({
     $or: [{ status_code: { $gte: 400 } }, { status_code: null }],

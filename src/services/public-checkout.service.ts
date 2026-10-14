@@ -18,6 +18,7 @@ import {
   isRazorpayConfigured,
   createRazorpayOrder,
 } from './razorpay.service.js';
+import { invalidateDashboardCache } from './admin/dashboard.cache.js';
 
 type BillingCycle = 'month' | 'quarterly';
 
@@ -96,6 +97,7 @@ export const createLead = async ({
     trial_days: plan.trial_days,
     status: 'pending',
   });
+  void invalidateDashboardCache();
 
   return createResponse(httpStatus.CREATED, 'Lead created successfully.', {
     lead_id: lead._id,
@@ -153,6 +155,7 @@ export const createCheckout = async ({
     trial_days: plan.trial_days,
     status: 'initiated',
   });
+  void invalidateDashboardCache();
 
   let checkout: Record<string, any> = { gateway };
 

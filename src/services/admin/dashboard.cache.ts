@@ -30,6 +30,42 @@ export interface WidgetResult<T> {
 
 const nowIso = (ms = Date.now()): string => new Date(ms).toISOString();
 
+/**
+ * Purge every cached dashboard widget so the next read recomputes from the
+ * database. Call it (fire-and-forget) after any mutation that changes a KPI:
+ * organizations, subscriptions, users and guest leads. Best-effort — a Redis
+ * hiccup must never fail the mutation that triggered it.
+ */
+export const invalidateDashboardCache = async (): Promise<void> => {
+  if (!isRedisConfigured()) {
+    return;
+  }
+  let redis: Redis;
+  try {
+    redis = getRedis();
+  } catch {
+    return;
+  }
+  try {
+    let cursor = '0';
+    do {
+      const [next, keys] = await redis.scan(
+        cursor,
+        'MATCH',
+        `${KEY_PREFIX}:*`,
+        'COUNT',
+        100,
+      );
+      cursor = next;
+      if (keys.length) {
+        await redis.del(...keys);
+      }
+    } while (cursor !== '0');
+  } catch (err: any) {
+    logger.error(`[DASHBOARD] cache invalidation failed: ${err.message}`);
+  }
+};
+
 const unavailable = <T>(
   compute: () => Promise<T>,
   scanHeavy?: boolean,

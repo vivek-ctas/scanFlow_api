@@ -12,6 +12,7 @@ import {
 } from './helpers.js';
 import {
   GuestLead,
+  Organization,
   Payment,
   Scan,
   Subscription,
@@ -28,6 +29,7 @@ import {
 } from '../src/utils/dashboard-time.js';
 import { getRedis, isRedisConfigured } from '../src/queues/redis.js';
 import { scrubErrorSummary } from '../src/utils/dashboard-scrub.js';
+import { invalidateDashboardCache } from '../src/services/admin/dashboard.cache.js';
 
 const tokenFor = async (user: any) => {
   const tokens = await generateAuthTokens(user as any);
@@ -85,6 +87,51 @@ describe('super admin dashboard (§dashboard)', () => {
       expect(res.body.data.subscriptions.active).toBe(1);
       expect(res.body.data.guest_leads.pending).toBe(1);
       expect(res.body.data.users).toBeTruthy();
+    });
+
+    it('GET /summary classifies paid, trial and manual subscriptions', async () => {
+      const plan = await createPlan({ name: 'Starter', price: 99 });
+      const makeSub = async (
+        gateway: 'stripe' | 'manual',
+        trialDays: number,
+      ) => {
+        const org = await createOrg({ status: 1 });
+        const payment = await Payment.create({
+          organization_id: org._id,
+          plan_id: plan._id,
+          gateway,
+          price: 99,
+          currency_code: 'inr',
+          billing_cycle: 'month',
+          status: 'TXN_SUCCESS',
+        });
+        await Subscription.create({
+          organization_id: org._id,
+          plan_id: plan._id,
+          payment_id: payment._id,
+          features: [{ features_name: 'scan', scan_limit: 100 }],
+          billing_cycle: 'month',
+          status: 'active',
+          started_at: new Date(),
+          expires_at: new Date(Date.now() + 30 * 86_400_000),
+          trial_days: trialDays,
+          plan_name: plan.name,
+        });
+      };
+
+      await makeSub('stripe', 0); // paid
+      await makeSub('manual', 0); // manual
+      await makeSub('manual', 14); // trial
+
+      const res = await request(app)
+        .get('/api/dashboard/summary')
+        .set('authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.subscriptions.active).toBe(3);
+      expect(res.body.data.subscriptions.paid).toBe(1);
+      expect(res.body.data.subscriptions.trial).toBe(1);
+      expect(res.body.data.subscriptions.manual).toBe(1);
     });
 
     it('GET /summary returns null change_pct when the previous period had no scans', async () => {
@@ -215,6 +262,33 @@ describe('super admin dashboard (§dashboard)', () => {
       expect(res.body.data.results[0].count).toBe(1);
     });
 
+    it('GET /plan-distribution no_plan excludes soft-deleted orgs', async () => {
+      const plan = await createPlan({ name: 'Pro', price: 199 });
+
+      const withPlan = await createOrg({ company_name: 'With Plan' });
+      await grant(withPlan.id, String(plan._id));
+
+      // A live org with no active subscription — the only real no-plan org.
+      await createOrg({ company_name: 'No Plan' });
+
+      // A soft-deleted org that still owns an active subscription: it must be
+      // left out of `no_plan` AND must not swallow a live no-plan org.
+      const deleted = await createOrg({ company_name: 'Deleted With Plan' });
+      await grant(deleted.id, String(plan._id));
+      await Organization.updateOne({ _id: deleted.id }, { status: 2 });
+
+      const res = await request(app)
+        .get('/api/dashboard/plan-distribution')
+        .set('authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      // Both active subscriptions still count in the plan split.
+      expect(
+        res.body.data.results.find((r: any) => r.plan_name === 'Pro').count,
+      ).toBe(2);
+      // Only the live org without a plan.
+      expect(res.body.data.no_plan).toBe(1);
+    });
+
     it('GET /growth returns org and lead series', async () => {
       await createOrg();
       const plan = await createPlan({ name: 'Starter', price: 99 });
@@ -258,6 +332,56 @@ describe('super admin dashboard (§dashboard)', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.results[0].name).toBe('Top Co');
       expect(res.body.data.results[0].usage).toBe(12);
+    });
+
+    it('GET /attention & /top-organizations exclude soft-deleted orgs', async () => {
+      const plan = await createPlan({
+        name: 'Pro',
+        price: 199,
+        scan_limit: 100,
+      });
+
+      const live = await createOrg({ company_name: 'Live Co' });
+      const liveSub = await grant(live.id, String(plan._id));
+      await Usage.updateOne(
+        { subscription_id: liveSub._id },
+        { $set: { usage: 95, scan_limit: 100, is_exhausted: false } },
+      );
+
+      // A soft-deleted org that still owns an active subscription expiring
+      // soon and over quota — it must never surface in either widget.
+      const deleted = await createOrg({ company_name: 'Deleted Co' });
+      const deletedSub = await grant(deleted.id, String(plan._id));
+      await Usage.updateOne(
+        { subscription_id: deletedSub._id },
+        { $set: { usage: 100, scan_limit: 100, is_exhausted: true } },
+      );
+      await Subscription.updateOne(
+        { _id: deletedSub._id },
+        { $set: { expires_at: new Date(Date.now() + 2 * 86_400_000) } },
+      );
+      await Organization.updateOne({ _id: deleted.id }, { status: 2 });
+
+      const [attention, top] = await Promise.all([
+        request(app)
+          .get('/api/dashboard/attention')
+          .set('authorization', `Bearer ${token}`),
+        request(app)
+          .get('/api/dashboard/top-organizations?limit=5')
+          .set('authorization', `Bearer ${token}`),
+      ]);
+
+      const names = [
+        ...attention.body.data.quota_exhausted,
+        ...attention.body.data.near_limit,
+        ...attention.body.data.expiring_soon,
+      ].map((r: any) => r.name);
+      expect(names).not.toContain('Deleted Co');
+      expect(names).toContain('Live Co');
+
+      const topNames = top.body.data.results.map((r: any) => r.name);
+      expect(topNames).not.toContain('Deleted Co');
+      expect(topNames).toContain('Live Co');
     });
 
     it('GET /attention buckets quota, near-limit, expiry and provisioning signals', async () => {
@@ -524,6 +648,19 @@ describe('super admin dashboard (§dashboard)', () => {
         .set('authorization', `Bearer ${token}`);
       expect(res.body.data.services.worker).toBe('degraded');
     });
+
+    it('GET /system treats an idle webhook queue as healthy, not unavailable', async () => {
+      // No pending deliveries -> oldest age is null. That is an idle queue, not
+      // an unreachable one, so it must not surface as `unavailable`.
+      await WebhookDelivery.deleteMany({ status: 'pending' });
+      const res = await request(app)
+        .get('/api/dashboard/system')
+        .set('authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.services.webhook_queue).toBe(
+        isRedisConfigured() ? 'healthy' : 'unavailable',
+      );
+    });
   });
 });
 
@@ -567,5 +704,23 @@ describe('dashboard error scrubber', () => {
 
     expect(summary.length).toBeLessThanOrEqual(151);
     expect(summary.endsWith('…')).toBe(true);
+  });
+});
+
+describe('dashboard cache invalidation', () => {
+  it('purges every dash:v2 widget key and leaves other namespaces alone', async () => {
+    if (!isRedisConfigured()) {
+      return;
+    }
+    const redis = getRedis();
+    await redis.set('dash:v2:summary', 'a');
+    await redis.set('dash:v2:attention', 'b');
+    await redis.set('other:key', 'c');
+
+    await invalidateDashboardCache();
+
+    expect(await redis.get('dash:v2:summary')).toBeNull();
+    expect(await redis.get('dash:v2:attention')).toBeNull();
+    expect(await redis.get('other:key')).toBe('c');
   });
 });

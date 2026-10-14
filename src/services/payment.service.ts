@@ -8,6 +8,7 @@ import { grantSubscription } from './subscription.service.js';
 import { sendPaymentFailureEmail } from './email.service.js';
 import { dispatchSubscriptionGrantEmails } from './subscription-email.service.js';
 import { logger } from '../config/logger.js';
+import { invalidateDashboardCache } from './admin/dashboard.cache.js';
 
 export interface ProcessGatewaySuccessInput {
   orderId: string;
@@ -127,6 +128,7 @@ export const processGatewaySuccess = async ({
       { _id: lead._id },
       { $set: { status: 'success' } },
     );
+    void invalidateDashboardCache();
 
     return {
       alreadyHandled: false,
@@ -138,6 +140,7 @@ export const processGatewaySuccess = async ({
       { _id: lead._id },
       { $set: { status: 'failed' } },
     );
+    void invalidateDashboardCache();
     payment.status = 'FAILED';
     payment.gateway_response = { error: err.message };
     await payment.save();
