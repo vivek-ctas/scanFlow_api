@@ -10,7 +10,15 @@ import {
   grant,
   scan,
 } from './helpers.js';
-import { GuestLead, Payment, Scan, Subscription, SystemError, Usage } from '../src/models/index.js';
+import {
+  GuestLead,
+  Payment,
+  Scan,
+  Subscription,
+  SystemError,
+  Usage,
+  WebhookDelivery,
+} from '../src/models/index.js';
 import { generateAuthTokens } from '../src/services/token.service.js';
 import { healthFromAge } from '../src/services/admin/dashboard.service.js';
 import {
@@ -114,9 +122,9 @@ describe('super admin dashboard (§dashboard)', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.scans.previous_month_same_period).toBeGreaterThan(0);
       expect(res.body.data.scans.change_pct).not.toBeNull();
-      expect(
-        Number.isFinite(res.body.data.scans.change_pct as number),
-      ).toBe(true);
+      expect(Number.isFinite(res.body.data.scans.change_pct as number)).toBe(
+        true,
+      );
     });
 
     it('GET /scan-trend validates range and returns daily points', async () => {
@@ -253,7 +261,11 @@ describe('super admin dashboard (§dashboard)', () => {
     });
 
     it('GET /attention buckets quota, near-limit, expiry and provisioning signals', async () => {
-      const plan = await createPlan({ name: 'Pro', price: 199, scan_limit: 100 });
+      const plan = await createPlan({
+        name: 'Pro',
+        price: 199,
+        scan_limit: 100,
+      });
 
       const quotaOrg = await createOrg({ company_name: 'Full Co' });
       const quotaSub = await grant(quotaOrg.id, String(plan._id));
@@ -338,13 +350,84 @@ describe('super admin dashboard (§dashboard)', () => {
       expect(paid[0].gateway_response).toBeUndefined();
     });
 
-    it('GET /webhooks reports delivery health', async () => {
+    it('GET /webhooks reports delivery health from last_attempt_at, not created_at', async () => {
+      const org = await createOrg();
+      const now = Date.now();
+      const hour = 3_600_000;
+      const base = {
+        scan_id: new mongoose.Types.ObjectId(),
+        organization_id: org._id,
+      };
+
+      await WebhookDelivery.collection.insertMany([
+        // Failed 1h ago although created 2 days ago → must count as a recent failure.
+        {
+          ...base,
+          event_id: 'evt-failed-recent',
+          status: 'failed',
+          retry_count: 1,
+          last_attempt_at: new Date(now - hour),
+          created_at: new Date(now - 48 * hour),
+          updated_at: new Date(now - hour),
+        },
+        // Failed 48h ago → outside the 24h window.
+        {
+          ...base,
+          event_id: 'evt-failed-old',
+          status: 'failed',
+          retry_count: 1,
+          last_attempt_at: new Date(now - 48 * hour),
+          created_at: new Date(now - 72 * hour),
+          updated_at: new Date(now - 48 * hour),
+        },
+        // Fresh pending delivery, no retries yet.
+        {
+          ...base,
+          event_id: 'evt-pending-fresh',
+          status: 'pending',
+          retry_count: 0,
+          created_at: new Date(now - 30_000),
+          updated_at: new Date(now - 30_000),
+        },
+        // Oldest pending, already retried once → drives both backlog and age.
+        {
+          ...base,
+          event_id: 'evt-pending-old',
+          status: 'pending',
+          retry_count: 2,
+          created_at: new Date(now - 20 * hour),
+          updated_at: new Date(now - 20 * hour),
+        },
+      ]);
+
       const res = await request(app)
         .get('/api/dashboard/webhooks')
         .set('authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
-      expect(typeof res.body.data.failed_last_24h).toBe('number');
-      expect(typeof res.body.data.pending).toBe('number');
+      const data = res.body.data;
+
+      expect(data.failed_24h).toBe(1);
+      expect(data.failed_last_24h).toBe(1);
+      expect(data.pending).toBe(2);
+      expect(data.retry_backlog).toBe(1);
+      expect(data.oldest_pending_age_seconds).toBeGreaterThanOrEqual(
+        20 * 3600 - 5,
+      );
+      expect(data.oldest_pending_age_seconds).toBeLessThan(20 * 3600 + 5);
+      expect(data.oldest_pending_age).toBe('20h');
+      expect(typeof data.computed_at).toBe('string');
+
+      if (isRedisConfigured()) {
+        expect(data.queue).toEqual({
+          waiting: expect.any(Number),
+          active: expect.any(Number),
+          completed: expect.any(Number),
+          delayed: expect.any(Number),
+          failed: expect.any(Number),
+        });
+      } else {
+        expect(data.queue).toBeNull();
+      }
     });
 
     it('GET /system returns scrubbed errors and masks sensitive data', async () => {

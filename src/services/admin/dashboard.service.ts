@@ -18,6 +18,7 @@ import { scrubErrorSummary } from '../../utils/dashboard-scrub.js';
 import {
   dashboardTimezone,
   dayBuckets,
+  formatAge,
   getMonthWindows,
   objectIdRange,
   resolveRange,
@@ -569,6 +570,49 @@ export const getAttention = async () => {
   };
 };
 
+export interface WebhookQueueCounts {
+  waiting: number;
+  active: number;
+  completed: number;
+  delayed: number;
+  failed: number;
+}
+
+const WEBHOOK_QUEUE_TYPES = [
+  'waiting',
+  'active',
+  'completed',
+  'delayed',
+  'failed',
+] as const;
+
+const QUEUE_COUNT_TIMEOUT_MS = 500;
+
+/** Rejects if `promise` does not settle within `ms`; keeps the timer unref'd. */
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out after ${ms}ms`));
+    }, ms);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+
+/**
+ * Delivery health for outbound webhooks. `failed_24h` is keyed on
+ * `last_attempt_at` (not `created_at`) so a delivery created days ago that
+ * failed an hour ago still counts. BullMQ counts are best-effort with a short
+ * timeout so Redis latency never blocks the dashboard.
+ */
 export const getWebhooks = async () => {
   const now = new Date();
   const since = new Date(now.getTime() - 24 * 3_600_000);
@@ -589,13 +633,27 @@ export const getWebhooks = async () => {
       .lean(),
   ]);
 
-  let queue: Record<string, number> | null = null;
+  const oldestPendingAgeSeconds = oldest
+    ? Math.max(
+        0,
+        Math.floor((now.getTime() - oldest.created_at.getTime()) / 1000),
+      )
+    : null;
+
+  let queue: WebhookQueueCounts | null = null;
   if (isRedisConfigured()) {
     try {
-      queue = (await getWebhookQueue().getJobCounts()) as Record<
-        string,
-        number
-      >;
+      const counts = await withTimeout(
+        getWebhookQueue().getJobCounts(...WEBHOOK_QUEUE_TYPES),
+        QUEUE_COUNT_TIMEOUT_MS,
+      );
+      queue = {
+        waiting: counts.waiting ?? counts.wait ?? 0,
+        active: counts.active ?? 0,
+        completed: counts.completed ?? 0,
+        delayed: counts.delayed ?? 0,
+        failed: counts.failed ?? 0,
+      };
     } catch {
       queue = null;
     }
@@ -604,11 +662,14 @@ export const getWebhooks = async () => {
   return {
     generated_at: now.toISOString(),
     failed_last_24h: failedLast24h,
+    failed_24h: failedLast24h,
     pending,
     retry_backlog: retryBacklog,
-    oldest_pending_age_seconds: oldest
-      ? Math.floor((now.getTime() - oldest.created_at.getTime()) / 1000)
-      : null,
+    oldest_pending_age_seconds: oldestPendingAgeSeconds,
+    oldest_pending_age:
+      oldestPendingAgeSeconds === null
+        ? null
+        : formatAge(oldestPendingAgeSeconds),
     queue,
   };
 };
