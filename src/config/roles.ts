@@ -11,6 +11,7 @@ export const allRoles = {
     'manageContact',
     'manageWebSettings',
     'viewDashboard',
+    'viewOrgDashboard',
   ],
   ORGANIZATION_ADMIN: [
     'viewOperators',
@@ -18,6 +19,7 @@ export const allRoles = {
     'manageScans',
     'manageWebhooks',
     'viewSubscription',
+    'viewOrgDashboard',
   ],
   OPERATOR: ['manageScans'],
 };

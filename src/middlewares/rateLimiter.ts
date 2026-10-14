@@ -17,3 +17,19 @@ export const operatorPinLimiter = rateLimit({
     return `${req.ip ?? 'unknown'}:${String(operatorId ?? '')}`.toUpperCase();
   },
 });
+
+/**
+ * Light per-user rate limit for org-dashboard endpoints.
+ * Prevents a runaway tab/script from hammering the customer-facing API.
+ * ~60 req/min per user (identified by user id or IP).
+ */
+export const orgDashboardLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => {
+    const userId = (req.user as any)?._id ?? req.ip ?? 'unknown';
+    return String(userId);
+  },
+});
