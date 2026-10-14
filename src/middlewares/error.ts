@@ -7,6 +7,32 @@ import { ApiError } from '../utils/ApiError.js';
 import { errorHandler as systemErrorHandler } from '../utils/system-error.handler.js';
 import { Request, Response, NextFunction } from 'express';
 
+const OBJECT_ID_IN_PATH = /\/[0-9a-fA-F]{24}(?=\/|$)/g;
+const UUID_IN_PATH =
+  /\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?=\/|$)/g;
+
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Route without query string, with path params masked (never store secrets/PII). */
+const sanitizeRoute = (req: Request): string => {
+  let path = req.originalUrl.split('?')[0] ?? '';
+  const params = (req.params ?? {}) as Record<string, unknown>;
+
+  for (const [key, value] of Object.entries(params)) {
+    const values = Array.isArray(value) ? value : [value];
+    for (const raw of values) {
+      if (raw == null || raw === '') continue;
+      path = path.replace(
+        new RegExp(`/${escapeRegExp(String(raw))}(?=/|$)`, 'g'),
+        `/:${key}`,
+      );
+    }
+  }
+
+  return path.replace(OBJECT_ID_IN_PATH, '/:id').replace(UUID_IN_PATH, '/:id');
+};
+
 export const errorConverter = (
   err: Error,
   req: Request,
@@ -63,6 +89,9 @@ export const errorHandler = (
   systemErrorHandler.errorM({
     action_type: 'global-error-handler',
     error_data: err,
+    method: req.method,
+    route: sanitizeRoute(req),
+    status_code: statusCode,
   });
 
   res.status(statusCode).send(response);

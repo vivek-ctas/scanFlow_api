@@ -54,6 +54,13 @@ router.get(
 );
 
 router.get(
+  '/:organizationId/usage-trend',
+  auth('viewSubscription'),
+  validate(subscriptionValidation.getOrganizationUsage),
+  subscriptionController.getUsageTrend,
+);
+
+router.get(
   '/:organizationId/subscription',
   auth('viewSubscription'),
   validate(subscriptionValidation.getSubscription),

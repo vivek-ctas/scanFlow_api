@@ -33,6 +33,12 @@ export const getOrganizationUsage = catchAsync(
   },
 );
 
+export const getUsageTrend = catchAsync(async (req: Request, res: Response) => {
+  const organizationId = await resolveOrgAndAssert(req);
+  const result = await subscriptionService.getUsageTrend(organizationId);
+  res.status(result.status).json(result);
+});
+
 export const getSubscriptions = catchAsync(
   async (req: Request, res: Response) => {
     const organizationId = await resolveOrgAndAssert(req);

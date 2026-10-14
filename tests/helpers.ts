@@ -14,6 +14,7 @@ import {
   WebhookDelivery,
   Country,
   WebSettings,
+  SystemError,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -75,6 +76,7 @@ const MODELS = [
   WebhookDelivery,
   Country,
   WebSettings,
+  SystemError,
 ];
 
 export const clearDb = async (): Promise<void> => {

@@ -1,4 +1,5 @@
 import { Model } from 'mongoose';
+import { scrubSensitiveText } from './dashboard-scrub.js';
 
 let globalSystemErrorModel: Model<any> | null = null;
 
@@ -6,39 +7,14 @@ export const setSystemErrorModel = (model: Model<any>) => {
   globalSystemErrorModel = model;
 };
 
-const serializeErrorData = (value: unknown): string => {
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  const seen = new WeakSet();
-
-  try {
-    return JSON.stringify(value, (_key, currentValue) => {
-      if (currentValue instanceof Error) {
-        return {
-          name: currentValue.name,
-          message: currentValue.message,
-          stack: currentValue.stack,
-        };
-      }
-
-      if (typeof currentValue === 'object' && currentValue !== null) {
-        if (seen.has(currentValue)) {
-          return '[Circular]';
-        }
-        seen.add(currentValue);
-      }
-
-      return currentValue;
-    });
-  } catch {
-    return String(value);
-  }
-};
-
 export const errorHandler = {
-  errorM: async (data: { action_type: string; error_data: unknown }) => {
+  errorM: async (data: {
+    action_type: string;
+    error_data: unknown;
+    method?: string;
+    route?: string;
+    status_code?: number;
+  }) => {
     try {
       if (!globalSystemErrorModel) {
         console.error(
@@ -50,7 +26,10 @@ export const errorHandler = {
 
       await globalSystemErrorModel.create({
         action_type: data.action_type,
-        error_data: serializeErrorData(data.error_data),
+        error_data: scrubSensitiveText(data.error_data),
+        method: data.method,
+        route: data.route,
+        status_code: data.status_code,
       });
     } catch (error) {
       console.error('Failed to save system error to database:', error);
