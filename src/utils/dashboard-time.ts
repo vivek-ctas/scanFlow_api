@@ -265,3 +265,20 @@ export const dayKey = (date: Date, timeZone: string): string => {
   const parts = zonedParts(date, timeZone);
   return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
 };
+
+/** Compact age label for dashboard widgets: `45s`, `20m`, `20h`, `2d`. */
+export const formatAge = (seconds: number): string => {
+  const safe = Math.max(0, Math.floor(seconds));
+  if (safe < 60) {
+    return `${safe}s`;
+  }
+  const minutes = Math.floor(safe / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  return `${Math.floor(hours / 24)}d`;
+};

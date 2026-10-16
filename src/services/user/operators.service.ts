@@ -12,6 +12,7 @@ import {
 import { ORGANIZATION_ASSIGNABLE_ROLES } from '../../config/roles.js';
 import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
 import { buildOperatorId } from '../../utils/operator-id.util.js';
+import { invalidateDashboardCache } from '../admin/dashboard.cache.js';
 
 const OPERATOR_ROLES = ORGANIZATION_ASSIGNABLE_ROLES;
 const PIN_PATTERN = /^\d{6}$/;
@@ -108,6 +109,7 @@ export const createOperator = async (
         operator_id: operatorId,
         pin_hash: pinHash,
       });
+      void invalidateDashboardCache();
       return createResponse(
         httpStatus.CREATED,
         'Operator created successfully.',
@@ -268,6 +270,7 @@ export const updateOperatorById = async (
   });
   user.modified_by = reqUser._id;
   await user.save();
+  void invalidateDashboardCache();
   return user;
 };
 
@@ -286,6 +289,7 @@ export const updateOperatorRoleById = async (
   user.role = role;
   user.modified_by = reqUser._id;
   await user.save();
+  void invalidateDashboardCache();
   return user;
 };
 
@@ -298,6 +302,7 @@ export const updateOperatorStatusById = async (
   user.status = computeStatus(body, user.status);
   user.modified_by = reqUser._id;
   await user.save();
+  void invalidateDashboardCache();
   return user;
 };
 
@@ -312,5 +317,6 @@ export const deleteOperatorById = async (operatorId: string, reqUser: any) => {
   user.status = 2;
   user.modified_by = reqUser._id;
   await user.save();
+  void invalidateDashboardCache();
   return user;
 };

@@ -34,6 +34,7 @@ import {
   dispatchSubscriptionExpiredEmail,
   dispatchSubscriptionGrantEmails,
 } from './subscription-email.service.js';
+import { invalidateDashboardCache } from './admin/dashboard.cache.js';
 
 const activeSubQuery = (organizationId: string) => ({
   organization_id: toObjectId(organizationId),
@@ -328,6 +329,7 @@ export const grantSubscription = async (
     await createUsageForSubscription(sub);
     await writeActiveSubCache(sub, true);
   }
+  void invalidateDashboardCache();
   return sub;
 };
 
@@ -349,6 +351,7 @@ export const promoteEarliestFutureSubscription = async (
   await writeActiveSubCache(earliest, true);
   await normalizeQueuePriorities(organizationId);
   void dispatchSubscriptionActivatedEmail(organizationId, earliest);
+  void invalidateDashboardCache();
   return earliest;
 };
 
@@ -395,6 +398,7 @@ export const cancelQueuedSubscription = async (
   sub.queue_priority = 0;
   await sub.save();
   await normalizeQueuePriorities(organizationId);
+  void invalidateDashboardCache();
   return createResponse(httpStatus.OK, 'Queued subscription cancelled.', {
     cancelledSubscription: sub._id,
     futureQueue: await getOrganizationSubscriptionQueue(organizationId),
@@ -472,6 +476,8 @@ export const reorderSubscriptionQueue = async (
   await normalizeQueuePriorities(organizationId);
   await recalculateQueueSchedule(organizationId);
 
+  void invalidateDashboardCache();
+
   return createResponse(httpStatus.OK, 'Future queue reordered successfully.', {
     futureQueue: await getOrganizationSubscriptionQueue(organizationId),
   });
@@ -539,6 +545,7 @@ export const adjustScanLimits = async (
       { $set: { 'features.$[feat].scan_limit': newLimit } },
       { arrayFilters: [{ 'feat.features_name': 'scan' }] },
     );
+    void invalidateDashboardCache();
     return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
       subscription_id: sub._id,
       scan_limit: newLimit,
@@ -575,6 +582,7 @@ export const adjustScanLimits = async (
       used,
     );
   }
+  void invalidateDashboardCache();
   return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
     subscription_id: sub._id,
     scan_limit: newLimit,
@@ -689,6 +697,7 @@ export const renewSubscription = async (
       void dispatchSubscriptionGrantEmails(organizationId, queuedSub as any);
     }
     await normalizeQueuePriorities(organizationId);
+    void invalidateDashboardCache();
     return createResponse(httpStatus.OK, 'Subscription renewed.', {
       activeSubscription: await getActiveSubscription(organizationId),
       futureQueue: await getOrganizationSubscriptionQueue(organizationId),
@@ -769,6 +778,7 @@ export const cancelActiveSubscription = async (
   await deleteActiveSubCache(organizationId);
   const promoted = await promoteEarliestFutureSubscription(organizationId);
   await normalizeQueuePriorities(organizationId);
+  void invalidateDashboardCache();
   return createResponse(httpStatus.OK, 'Active subscription cancelled.', {
     cancelledSubscription: active._id,
     promotedSubscription: promoted?._id ?? null,

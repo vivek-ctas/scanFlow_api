@@ -18,6 +18,7 @@ import {
 import { grantSubscription } from '../subscription.service.js';
 import { dispatchSubscriptionGrantEmails } from '../subscription-email.service.js';
 import { resolveCountryName } from '../country-resolver.service.js';
+import { invalidateDashboardCache } from './dashboard.cache.js';
 
 export const createOrganization = async (
   orgBody: Record<string, any>,
@@ -105,6 +106,8 @@ export const createOrganization = async (
     );
     void dispatchSubscriptionGrantEmails(String(org._id), data.subscription);
   }
+
+  void invalidateDashboardCache();
 
   return createResponse(
     httpStatus.CREATED,
@@ -293,6 +296,8 @@ export const updateOrganizationById = async (
     );
   }
 
+  void invalidateDashboardCache();
+
   return org;
 };
 
@@ -305,6 +310,7 @@ export const updateOrganizationStatusById = async (
   org.status = computeStatus(body, org.status);
   org.modified_by = modifiedBy ? toObjectId(modifiedBy) : null;
   await org.save();
+  void invalidateDashboardCache();
   return org;
 };
 
@@ -316,5 +322,6 @@ export const deleteOrganizationById = async (
   org.status = 2;
   org.modified_by = actorId ? toObjectId(actorId) : null;
   await org.save();
+  void invalidateDashboardCache();
   return org;
 };

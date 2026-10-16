@@ -18,6 +18,7 @@ import { scrubErrorSummary } from '../../utils/dashboard-scrub.js';
 import {
   dashboardTimezone,
   dayBuckets,
+  formatAge,
   getMonthWindows,
   objectIdRange,
   resolveRange,
@@ -52,7 +53,16 @@ interface ActiveUsageRow {
 }
 
 const loadActiveUsage = async (): Promise<ActiveUsageRow[]> => {
-  const actives = await Subscription.find({ status: 'active' })
+  // A soft-deleted org keeps its subscription, so active subs must be filtered
+  // against org status here or deleted orgs leak into `/attention` and
+  // `/top-organizations` (§3: soft-deleted orgs are excluded everywhere).
+  const deletedOrgIds = await Organization.distinct('_id', { status: 2 });
+  const actives = await Subscription.find({
+    status: 'active',
+    ...(deletedOrgIds.length
+      ? { organization_id: { $nin: deletedOrgIds } }
+      : {}),
+  })
     .select(
       'organization_id plan_name billing_cycle started_at expires_at features',
     )
@@ -122,7 +132,7 @@ export const getSummary = async () => {
       { $match: { status: 'active' } },
       {
         $lookup: {
-          from: 'tbl_payment',
+          from: Payment.collection.name,
           localField: 'payment_id',
           foreignField: '_id',
           as: 'payment',
@@ -305,13 +315,12 @@ export const getScanTrend = async (options: {
 };
 
 export const getPlanDistribution = async () => {
-  const [grouped, orgTotal, orgsWithActive] = await Promise.all([
+  const [grouped, activeOrgIds] = await Promise.all([
     Subscription.aggregate([
       { $match: { status: 'active' } },
       { $group: { _id: '$plan_id', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
+      { $sort: { count: -1, _id: 1 } },
     ]).option({ maxTimeMS: maxMs() }),
-    Organization.countDocuments({ status: { $ne: 2 } }),
     Subscription.distinct('organization_id', { status: 'active' }),
   ]);
 
@@ -333,9 +342,18 @@ export const getPlanDistribution = async () => {
     count: row.count as number,
   }));
 
+  // Count live (non-deleted) orgs with no active subscription directly, rather
+  // than subtracting the active-org set: a soft-deleted org can still own an
+  // active subscription (`deleteOrganizationById` only flips `status`), which
+  // would otherwise inflate the active set and undercount the no-plan badge.
+  const noPlan = await Organization.countDocuments({
+    status: { $ne: 2 },
+    _id: { $nin: activeOrgIds.filter(Boolean) },
+  });
+
   return {
     results,
-    no_plan: Math.max(0, orgTotal - orgsWithActive.length),
+    no_plan: noPlan,
   };
 };
 
@@ -569,6 +587,49 @@ export const getAttention = async () => {
   };
 };
 
+export interface WebhookQueueCounts {
+  waiting: number;
+  active: number;
+  completed: number;
+  delayed: number;
+  failed: number;
+}
+
+const WEBHOOK_QUEUE_TYPES = [
+  'waiting',
+  'active',
+  'completed',
+  'delayed',
+  'failed',
+] as const;
+
+const QUEUE_COUNT_TIMEOUT_MS = 500;
+
+/** Rejects if `promise` does not settle within `ms`; keeps the timer unref'd. */
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out after ${ms}ms`));
+    }, ms);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+
+/**
+ * Delivery health for outbound webhooks. `failed_24h` is keyed on
+ * `last_attempt_at` (not `created_at`) so a delivery created days ago that
+ * failed an hour ago still counts. BullMQ counts are best-effort with a short
+ * timeout so Redis latency never blocks the dashboard.
+ */
 export const getWebhooks = async () => {
   const now = new Date();
   const since = new Date(now.getTime() - 24 * 3_600_000);
@@ -589,13 +650,27 @@ export const getWebhooks = async () => {
       .lean(),
   ]);
 
-  let queue: Record<string, number> | null = null;
+  const oldestPendingAgeSeconds = oldest
+    ? Math.max(
+        0,
+        Math.floor((now.getTime() - oldest.created_at.getTime()) / 1000),
+      )
+    : null;
+
+  let queue: WebhookQueueCounts | null = null;
   if (isRedisConfigured()) {
     try {
-      queue = (await getWebhookQueue().getJobCounts()) as Record<
-        string,
-        number
-      >;
+      const counts = await withTimeout(
+        getWebhookQueue().getJobCounts(...WEBHOOK_QUEUE_TYPES),
+        QUEUE_COUNT_TIMEOUT_MS,
+      );
+      queue = {
+        waiting: counts.waiting ?? counts.wait ?? 0,
+        active: counts.active ?? 0,
+        completed: counts.completed ?? 0,
+        delayed: counts.delayed ?? 0,
+        failed: counts.failed ?? 0,
+      };
     } catch {
       queue = null;
     }
@@ -604,11 +679,14 @@ export const getWebhooks = async () => {
   return {
     generated_at: now.toISOString(),
     failed_last_24h: failedLast24h,
+    failed_24h: failedLast24h,
     pending,
     retry_backlog: retryBacklog,
-    oldest_pending_age_seconds: oldest
-      ? Math.floor((now.getTime() - oldest.created_at.getTime()) / 1000)
-      : null,
+    oldest_pending_age_seconds: oldestPendingAgeSeconds,
+    oldest_pending_age:
+      oldestPendingAgeSeconds === null
+        ? null
+        : formatAge(oldestPendingAgeSeconds),
     queue,
   };
 };
@@ -676,9 +754,14 @@ export const getSystem = async () => {
   const oldestAgeMs = oldest
     ? now.getTime() - oldest.created_at.getTime()
     : null;
-  const webhookQueue: Health = isRedisConfigured()
-    ? healthFromAge(oldestAgeMs, 120_000, 600_000)
-    : 'unavailable';
+  // No pending delivery means the queue is idle, not unreachable. Passing a
+  // null age to `healthFromAge` would wrongly return `unavailable`, so an idle
+  // queue is reported healthy (mirrors `/webhooks`, where no pending == healthy).
+  const webhookQueue: Health = !isRedisConfigured()
+    ? 'unavailable'
+    : oldestAgeMs === null
+      ? 'healthy'
+      : healthFromAge(oldestAgeMs, 120_000, 600_000);
 
   const errors = await SystemError.find({
     $or: [{ status_code: { $gte: 400 } }, { status_code: null }],

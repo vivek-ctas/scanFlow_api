@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getMonthWindows } from '../src/utils/dashboard-time.js';
+import { formatAge, getMonthWindows } from '../src/utils/dashboard-time.js';
 
 /**
  * IST is UTC+5:30 and has no DST, which keeps the expected instants stable.
@@ -20,9 +20,7 @@ describe('getMonthWindows (month-to-date vs same period last month)', () => {
     expect(win.previousMonthSamePeriodEnd.toISOString()).toBe(
       '2026-09-05T06:30:00.000Z',
     ); // Sep 5 12:00 IST — exactly four days twelve hours in
-    expect(win.previousMonthEnd.toISOString()).toBe(
-      '2026-09-30T18:30:00.000Z',
-    );
+    expect(win.previousMonthEnd.toISOString()).toBe('2026-09-30T18:30:00.000Z');
   });
 
   it('on the first of the month only counts the elapsed sliver, not the whole month', () => {
@@ -67,5 +65,26 @@ describe('getMonthWindows (month-to-date vs same period last month)', () => {
     expect(win.previousMonthSamePeriodEnd.toISOString()).toBe(
       '2026-09-05T06:30:00.000Z',
     );
+  });
+});
+
+describe('formatAge', () => {
+  it('formats seconds, minutes, hours and days', () => {
+    expect(formatAge(0)).toBe('0s');
+    expect(formatAge(45)).toBe('45s');
+    expect(formatAge(59)).toBe('59s');
+    expect(formatAge(60)).toBe('1m');
+    expect(formatAge(20 * 60)).toBe('20m');
+    expect(formatAge(59 * 60)).toBe('59m');
+    expect(formatAge(3_600)).toBe('1h');
+    expect(formatAge(20 * 3_600)).toBe('20h');
+    expect(formatAge(23 * 3_600)).toBe('23h');
+    expect(formatAge(24 * 3_600)).toBe('1d');
+    expect(formatAge(48 * 3_600)).toBe('2d');
+  });
+
+  it('clamps negative and fractional input', () => {
+    expect(formatAge(-5)).toBe('0s');
+    expect(formatAge(90.9)).toBe('1m');
   });
 });
