@@ -87,7 +87,7 @@ export const getOrgScanTrend = catchAsync(
 
 export const getOrgTeam = catchAsync(async (req: Request, res: Response) => {
   const organizationId = getOrgId(req);
-  const options: WidgetCacheOptions = { freshSeconds: 120 };
+  const options: WidgetCacheOptions = { freshSeconds: 120, scanHeavy: true };
   const key = `org-dashboard:team:${organizationId}`;
   const result = await getOrCompute(key, options, () =>
     orgDashboardService.getOrgTeam(organizationId),
