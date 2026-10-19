@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import config from '../../config/config.js';
 import { Scan } from '../../models/scan.model.js';
 import { User } from '../../models/user.model.js';
 import { Usage } from '../../models/usage.model.js';
@@ -7,12 +8,16 @@ import { WebhookConfig } from '../../models/webhook-config.model.js';
 import { WebhookDelivery } from '../../models/webhook-delivery.model.js';
 import { Organization } from '../../models/organization.model.js';
 import { getRedis, isRedisConfigured } from '../../queues/redis.js';
-import { getSubscriptionSummary } from '../subscription.service.js';
-import { getUsageTrend } from '../subscription.service.js';
+import { scrubErrorSummary } from '../../utils/dashboard-scrub.js';
 import {
   dashboardTimezone,
+  dayBuckets,
+  resolveRange,
   startOfDayUtc,
+  type DashboardRange,
 } from '../../utils/dashboard-time.js';
+
+const maxMs = () => config.dashboard.queryMaxMs;
 
 export interface OrgSummary {
   organization_id: string;
@@ -120,11 +125,12 @@ export const getOrgSummary = async (
   };
 };
 
-const NEAR_LIMIT_PCT = Number(process.env.DASHBOARD_NEAR_LIMIT_PCT ?? 90);
+const NEAR_LIMIT_PCT = config.dashboard.nearLimitPct;
 
-export const getOrgQuota = async (
-  organizationId: string,
-): Promise<OrgQuota> => {
+export const getOrgQuota = async (organizationId: string): Promise<OrgQuota> =>
+  buildOrgQuota(organizationId);
+
+const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
   const orgId = new mongoose.Types.ObjectId(organizationId);
   const now = new Date();
 
@@ -265,21 +271,17 @@ export const getOrgScanTrend = async (
 ): Promise<OrgScanTrend> => {
   const orgId = new mongoose.Types.ObjectId(organizationId);
   const tz = dashboardTimezone();
-  const now = new Date();
+  const range = (params.range ?? '30d') as DashboardRange;
 
-  let from = params.from;
-  let to = params.to;
-  const range = params.range ?? '30d';
-
-  if (!from || !to) {
-    const days = range === '7d' ? 7 : range === '90d' ? 90 : 30;
-    to = new Date();
-    from = new Date(to.getTime() - days * 86400000);
-  }
+  const resolved = resolveRange(tz, {
+    range,
+    from: params.from,
+    to: params.to,
+  });
 
   const match = {
-    organization_id: new mongoose.Types.ObjectId(organizationId),
-    scanned_at: { $gte: from, $lte: to },
+    organization_id: orgId,
+    scanned_at: { $gte: resolved.start, $lt: resolved.end },
   };
 
   const points = await Scan.aggregate([
@@ -297,24 +299,20 @@ export const getOrgScanTrend = async (
       },
     },
     { $sort: { _id: 1 } },
-  ]);
+  ]).option({ maxTimeMS: maxMs() });
 
   const pointMap = new Map(points.map((p) => [p._id, p.count]));
-  const allDates: { date: string; count: number }[] = [];
-  const current = new Date(from);
-  while (current <= to) {
-    const dateStr = current.toISOString().split('T')[0] ?? '';
-    allDates.push({ date: dateStr, count: pointMap.get(dateStr) ?? 0 });
-    current.setDate(current.getDate() + 1);
-  }
+  const buckets = dayBuckets(resolved.start, resolved.end, tz);
+  const allDates = buckets.map((bucket) => ({
+    date: bucket.key,
+    count: pointMap.get(bucket.key) ?? 0,
+  }));
 
   let comparison: { date: string; count: number }[] | null = null;
   if (params.compare) {
-    const prevFrom = new Date(from.getTime() - (to.getTime() - from.getTime()));
-    const prevTo = new Date(from.getTime() - 1);
     const prevMatch = {
-      organization_id: new mongoose.Types.ObjectId(organizationId),
-      scanned_at: { $gte: prevFrom, $lte: prevTo },
+      organization_id: orgId,
+      scanned_at: { $gte: resolved.previousStart, $lt: resolved.previousEnd },
     };
     const prevPoints = await Scan.aggregate([
       { $match: prevMatch },
@@ -331,19 +329,20 @@ export const getOrgScanTrend = async (
         },
       },
       { $sort: { _id: 1 } },
-    ]);
+    ]).option({ maxTimeMS: maxMs() });
     const prevMap = new Map(prevPoints.map((p) => [p._id, p.count]));
-    const comparisonDates: { date: string; count: number }[] = [];
-    current.setTime(prevFrom.getTime());
-    while (current <= prevTo) {
-      const dateStr = current.toISOString().split('T')[0] ?? '';
-      comparisonDates.push({ date: dateStr, count: prevMap.get(dateStr) ?? 0 });
-      current.setDate(current.getDate() + 1);
-    }
-    comparison = comparisonDates;
+    const prevBuckets = dayBuckets(
+      resolved.previousStart,
+      resolved.previousEnd,
+      tz,
+    );
+    comparison = prevBuckets.map((bucket) => ({
+      date: bucket.key,
+      count: prevMap.get(bucket.key) ?? 0,
+    }));
   }
 
-  let peakHour = null;
+  let peakHour: { hour: number; count: number } | null = null;
   const hourAgg = await Scan.aggregate([
     { $match: match },
     {
@@ -354,7 +353,7 @@ export const getOrgScanTrend = async (
     },
     { $sort: { count: -1 } },
     { $limit: 1 },
-  ]);
+  ]).option({ maxTimeMS: maxMs() });
   if (hourAgg.length) {
     peakHour = { hour: hourAgg[0]._id, count: hourAgg[0].count };
   }
@@ -377,14 +376,15 @@ export interface OrgTeam {
 export const getOrgTeam = async (organizationId: string): Promise<OrgTeam> => {
   const orgId = new mongoose.Types.ObjectId(organizationId);
   const now = new Date();
-  const tz = dashboardTimezone();
   const topFrom = new Date(now.getTime() - 30 * 86400000);
   const quietFrom = new Date(now.getTime() - 7 * 86400000);
 
   const activeOperators = await User.find(
     { organization_id: orgId, role: 'OPERATOR', status: 1 },
     { _id: 1, first_name: 1, last_name: 1 },
-  ).lean();
+  )
+    .limit(500)
+    .lean();
 
   const operatorIds = activeOperators.map((u) => u._id);
 
@@ -400,7 +400,7 @@ export const getOrgTeam = async (organizationId: string): Promise<OrgTeam> => {
       { $group: { _id: '$user_id', scans: { $sum: 1 } } },
       { $sort: { scans: -1 } },
       { $limit: 10 },
-    ]),
+    ]).option({ maxTimeMS: maxMs() }),
     Scan.aggregate([
       {
         $match: {
@@ -410,7 +410,7 @@ export const getOrgTeam = async (organizationId: string): Promise<OrgTeam> => {
         },
       },
       { $group: { _id: '$user_id' } },
-    ]),
+    ]).option({ maxTimeMS: maxMs() }),
   ]);
 
   const quietScanned = new Set(quietAgg.map((a) => String(a._id)));
@@ -523,8 +523,7 @@ export const getOrgWebhooks = async (
       : null,
     last_error: lastErrorDelivery
       ? {
-          summary:
-            lastErrorDelivery.last_error?.substring(0, 200) ?? 'Unknown error',
+          summary: scrubErrorSummary(lastErrorDelivery.last_error),
           at: lastErrorDelivery.created_at.toISOString(),
         }
       : null,
@@ -545,86 +544,70 @@ export const getOrgAttention = async (
   const orgId = new mongoose.Types.ObjectId(organizationId);
   const now = new Date();
 
-  const [quota, subscription, webhookConfig] = await Promise.all([
-    Usage.findOne({ organization_id: orgId }).sort({ created_at: -1 }).lean(),
-    Subscription.findOne({ organization_id: orgId, status: 'active' })
-      .sort({ started_at: -1 })
-      .lean(),
-    WebhookConfig.findOne({ organization_id: orgId }).select('enabled').lean(),
+  const [quota, webhooks] = await Promise.all([
+    buildOrgQuota(organizationId),
+    getOrgWebhooks(organizationId),
   ]);
 
   const items: OrgAttention['items'] = [];
 
-  if (!subscription) {
+  if (quota.state === 'no_subscription') {
     items.push({
       type: 'no_subscription',
       severity: 'critical',
       data: { message: 'No active subscription. Scanning is blocked.' },
     });
   } else {
-    const planLimit =
-      subscription.features?.find((f: any) => f.features_name === 'scan')
-        ?.scan_limit ?? 0;
-    const unlimited = planLimit === 0;
-    const used = quota?.usage ?? 0;
-
-    if (!unlimited) {
-      const utilization =
-        planLimit > 0 ? Math.round((used / planLimit) * 100) : 0;
-      if (used >= planLimit) {
+    if (!quota.unlimited) {
+      if (quota.state === 'exhausted') {
         items.push({
           type: 'quota_exhausted',
           severity: 'critical',
-          data: { used, limit: planLimit, utilization_pct: 100 },
+          data: {
+            used: quota.used,
+            limit: quota.scan_limit,
+            utilization_pct: 100,
+          },
         });
-      } else if (utilization >= 90) {
+      } else if (quota.state === 'near_limit') {
         items.push({
           type: 'quota_near_limit',
           severity: 'warning',
-          data: { used, limit: planLimit, utilization_pct: utilization },
+          data: {
+            used: quota.used,
+            limit: quota.scan_limit,
+            utilization_pct: quota.utilization_pct ?? 0,
+          },
         });
       }
     }
 
-    const expiresAt = new Date(subscription.expires_at);
-    const daysLeft = Math.ceil(
-      (expiresAt.getTime() - now.getTime()) / 86400000,
-    );
-    if (daysLeft <= 7) {
-      const futureSub = await Subscription.findOne({
-        organization_id: orgId,
-        status: 'future',
-      }).lean();
+    if (quota.days_left <= 7) {
       items.push({
         type: 'subscription_expiring',
-        severity: futureSub ? 'info' : 'warning',
-        data: { days_left: daysLeft, next_plan_queued: !!futureSub },
+        severity: quota.next_plan_queued ? 'info' : 'warning',
+        data: {
+          days_left: quota.days_left,
+          next_plan_queued: quota.next_plan_queued,
+        },
       });
     }
   }
 
-  if (webhookConfig) {
-    if (!webhookConfig.enabled) {
+  if (webhooks.state === 'enabled') {
+    if (webhooks.failed_24h && webhooks.failed_24h > 0) {
       items.push({
-        type: 'webhook_disabled',
-        severity: 'info',
-        data: { message: 'Webhooks are configured but disabled.' },
+        type: 'webhook_failing',
+        severity: 'warning',
+        data: { failed_24h: webhooks.failed_24h },
       });
-    } else {
-      const failed24h = await WebhookDelivery.countDocuments({
-        organization_id: orgId,
-        status: 'failed',
-        last_attempt_at: { $gte: new Date(now.getTime() - 24 * 3600000) },
-        last_error: { $ne: 'No enabled webhook config for organization' },
-      });
-      if (failed24h > 0) {
-        items.push({
-          type: 'webhook_failing',
-          severity: 'warning',
-          data: { failed_24h: failed24h },
-        });
-      }
     }
+  } else if (webhooks.state === 'disabled') {
+    items.push({
+      type: 'webhook_disabled',
+      severity: 'info',
+      data: { message: 'Webhooks are configured but disabled.' },
+    });
   } else {
     items.push({
       type: 'webhook_not_configured',
@@ -633,24 +616,32 @@ export const getOrgAttention = async (
     });
   }
 
-  const activeOperators = await User.countDocuments({
-    organization_id: orgId,
-    role: 'OPERATOR',
-    status: 1,
-  });
-  if (activeOperators > 0) {
+  const activeOperators = await User.find(
+    { organization_id: orgId, role: 'OPERATOR', status: 1 },
+    { _id: 1 },
+  )
+    .limit(500)
+    .lean();
+  if (activeOperators.length > 0) {
+    const ids = activeOperators.map((u) => u._id);
     const quietFrom = new Date(now.getTime() - 7 * 86400000);
     const quietAgg = await Scan.aggregate([
-      { $match: { organization_id: orgId, scanned_at: { $gte: quietFrom } } },
+      {
+        $match: {
+          organization_id: orgId,
+          user_id: { $in: ids },
+          scanned_at: { $gte: quietFrom },
+        },
+      },
       { $group: { _id: '$user_id' } },
-    ]);
+    ]).option({ maxTimeMS: maxMs() });
     const quietScanned = new Set(quietAgg.map((a) => String(a._id)));
-    const quietCount = activeOperators - quietScanned.size;
+    const quietCount = activeOperators.length - quietScanned.size;
     if (quietCount > 0) {
       items.push({
         type: 'operators_quiet',
         severity: 'info',
-        data: { quiet_count: quietCount, total_active: activeOperators },
+        data: { quiet_count: quietCount, total_active: activeOperators.length },
       });
     }
   }
