@@ -7,6 +7,8 @@ import {
   startWebhookWorker,
   sweepWebhookBatches,
 } from './queues/webhook.worker.js';
+import { startSupportWorker } from './queues/support.worker.js';
+import { runAutoCloseJob } from './services/support.service.js';
 import { reconcileScanUsage } from './services/quota.service.js';
 import { normalizeAllQueuePriorities } from './services/subscription.service.js';
 import { getRedis, isRedisConfigured } from './queues/redis.js';
@@ -16,6 +18,8 @@ import {
 } from './cron/subscription/index.js';
 
 let worker: Awaited<ReturnType<typeof startWebhookWorker>> | null = null;
+let supportWorker: Awaited<ReturnType<typeof startSupportWorker>> | null = null;
+let supportAutoCloseTimer: NodeJS.Timeout | null = null;
 let reconcileTimer: NodeJS.Timeout | null = null;
 let activationTimer: NodeJS.Timeout | null = null;
 let reminderTimer: NodeJS.Timeout | null = null;
@@ -65,6 +69,17 @@ const everyHour = async () => {
   }
 };
 
+const autoCloseSupport = async () => {
+  try {
+    const closed = await runAutoCloseJob();
+    if (closed) {
+      logger.info(`[SUPPORT] auto-closed ${closed} resolved ticket(s)`);
+    }
+  } catch (err: any) {
+    logger.error(`[SUPPORT] auto-close failed: ${err.message}`);
+  }
+};
+
 const start = async () => {
   setSystemErrorModel(SystemError);
   mongoose.set('strictQuery', false);
@@ -73,6 +88,9 @@ const start = async () => {
 
   worker = await startWebhookWorker();
   logger.info('Webhook worker ready');
+
+  supportWorker = await startSupportWorker();
+  logger.info('Support worker ready');
 
   // Signal liveness immediately and independently of the reconcile loop, so a
   // slow or hung maintenance pass can never suppress the dashboard heartbeat.
@@ -89,6 +107,8 @@ const start = async () => {
   activationTimer = setInterval(everyMinute, 60_000);
   reminderTimer = setInterval(everyHalfHour, 1_800_000);
   purgeTimer = setInterval(everyHour, 3_600_000);
+  await autoCloseSupport();
+  supportAutoCloseTimer = setInterval(autoCloseSupport, 3_600_000);
   webhookBatchTimer = setInterval(
     () =>
       sweepWebhookBatches().catch((err: any) =>
@@ -118,8 +138,14 @@ const shutdown = async () => {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
   }
+  if (supportAutoCloseTimer) {
+    clearInterval(supportAutoCloseTimer);
+  }
   if (worker) {
     await worker.close();
+  }
+  if (supportWorker) {
+    await supportWorker.close();
   }
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();

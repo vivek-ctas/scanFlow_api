@@ -1,0 +1,145 @@
+import mongoose, { Document, Model, Schema } from 'mongoose';
+import { toJSON } from './plugins/toJSON.plugin.js';
+import { paginate } from './plugins/paginate.plugin.js';
+
+export type SupportCategory =
+  | 'scanner'
+  | 'account_login'
+  | 'subscription_quota'
+  | 'webhook'
+  | 'bug'
+  | 'other';
+
+export type SupportPriority = 'low' | 'normal' | 'high' | 'critical';
+
+export type SupportStatus =
+  | 'open'
+  | 'in_progress'
+  | 'waiting_for_customer'
+  | 'resolved'
+  | 'closed';
+
+export const SUPPORT_CATEGORIES: SupportCategory[] = [
+  'scanner',
+  'account_login',
+  'subscription_quota',
+  'webhook',
+  'bug',
+  'other',
+];
+
+export const SUPPORT_PRIORITIES: SupportPriority[] = [
+  'low',
+  'normal',
+  'high',
+  'critical',
+];
+
+export const SUPPORT_STATUSES: SupportStatus[] = [
+  'open',
+  'in_progress',
+  'waiting_for_customer',
+  'resolved',
+  'closed',
+];
+
+/** Statuses that count as "active" for summaries and the per-org cap. */
+export const ACTIVE_SUPPORT_STATUSES: SupportStatus[] = [
+  'open',
+  'in_progress',
+  'waiting_for_customer',
+];
+
+export interface ISupportTicket extends Document {
+  ticket_no: string;
+  organization_id: mongoose.Types.ObjectId;
+  created_by?: mongoose.Types.ObjectId | null;
+  subject: string;
+  category: SupportCategory;
+  priority: SupportPriority;
+  status: SupportStatus;
+  assigned_to?: mongoose.Types.ObjectId | null;
+  last_message_at?: Date | null;
+  last_customer_message_at?: Date | null;
+  last_staff_message_at?: Date | null;
+  first_response_at?: Date | null;
+  resolved_at?: Date | null;
+  closed_at?: Date | null;
+  smart_context?: Record<string, any> | null;
+  client_info?: Record<string, any> | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface ISupportTicketModel extends Model<ISupportTicket> {
+  paginate: (
+    filter: Record<string, any>,
+    options: Record<string, any>,
+  ) => Promise<any>;
+}
+
+const supportTicketSchema = new Schema<
+  ISupportTicket,
+  ISupportTicketModel
+>(
+  {
+    ticket_no: { type: String, required: true, unique: true, trim: true },
+    organization_id: {
+      type: Schema.Types.ObjectId,
+      ref: 'tbl_organization',
+      required: true,
+      index: true,
+    },
+    created_by: { type: Schema.Types.ObjectId, ref: 'tbl_user', default: null },
+    subject: { type: String, required: true, trim: true, maxlength: 120 },
+    category: {
+      type: String,
+      enum: SUPPORT_CATEGORIES,
+      default: 'other',
+    },
+    priority: {
+      type: String,
+      enum: SUPPORT_PRIORITIES,
+      default: 'normal',
+    },
+    status: {
+      type: String,
+      enum: SUPPORT_STATUSES,
+      default: 'open',
+      index: true,
+    },
+    assigned_to: { type: Schema.Types.ObjectId, ref: 'tbl_user', default: null },
+    last_message_at: { type: Date, default: null },
+    last_customer_message_at: { type: Date, default: null },
+    last_staff_message_at: { type: Date, default: null },
+    first_response_at: { type: Date, default: null },
+    resolved_at: { type: Date, default: null },
+    closed_at: { type: Date, default: null },
+    // Staff-only snapshot, never serialised by accident (select:false + private).
+    smart_context: {
+      type: Schema.Types.Mixed,
+      default: null,
+      select: false,
+      private: true,
+    },
+    client_info: {
+      type: Schema.Types.Mixed,
+      default: null,
+      select: false,
+      private: true,
+    },
+  },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
+);
+
+supportTicketSchema.index({ organization_id: 1, status: 1, updated_at: -1 });
+supportTicketSchema.index({ status: 1, updated_at: -1 });
+supportTicketSchema.index({ assigned_to: 1, status: 1 });
+
+supportTicketSchema.plugin(toJSON);
+supportTicketSchema.plugin(paginate);
+
+export const SupportTicket = mongoose.model<
+  ISupportTicket,
+  ISupportTicketModel
+>('tbl_support_ticket', supportTicketSchema);
