@@ -518,9 +518,12 @@ export const getOrgWebhooks = async (
     failed_24h: failed24h,
     pending,
     oldest_pending_age_seconds: oldestPendingAgeSeconds,
-    oldest_pending_age: oldestPendingAgeSeconds
-      ? `${Math.floor(oldestPendingAgeSeconds / 3600)}h`
-      : null,
+    oldest_pending_age:
+      oldestPendingAgeSeconds === null
+        ? null
+        : oldestPendingAgeSeconds < 3600
+          ? `${Math.max(1, Math.floor(oldestPendingAgeSeconds / 60))}m`
+          : `${Math.floor(oldestPendingAgeSeconds / 3600)}h`,
     last_error: lastErrorDelivery
       ? {
           summary: scrubErrorSummary(lastErrorDelivery.last_error),
