@@ -5,10 +5,7 @@ import { logger } from '../config/logger.js';
 import { isRedisConfigured } from './redis.js';
 
 export type SupportNotificationEvent =
-  | 'ticket_created'
-  | 'customer_replied'
-  | 'staff_replied'
-  | 'status_changed';
+  'ticket_created' | 'customer_replied' | 'staff_replied' | 'status_changed';
 
 export interface SupportNotificationJob {
   event: SupportNotificationEvent;

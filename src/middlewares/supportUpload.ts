@@ -1,3 +1,4 @@
+import path from 'path';
 import multer from 'multer';
 import httpStatus from 'http-status';
 import config from '../config/config.js';
@@ -7,6 +8,12 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from '../services/support-storage.service.js';
 
+const TEXT_EXTENSION_MIME: Record<string, string> = {
+  '.txt': 'text/plain',
+  '.log': 'text/plain',
+  '.csv': 'text/csv',
+};
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -14,6 +21,12 @@ const upload = multer({
     files: MAX_ATTACHMENTS_PER_MESSAGE,
   },
   fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'application/octet-stream') {
+      const normalized =
+        TEXT_EXTENSION_MIME[path.extname(file.originalname).toLowerCase()];
+      if (normalized) file.mimetype = normalized;
+    }
+
     if (!SUPPORT_ALLOWED_MIME.has(file.mimetype)) {
       cb(
         new ApiError(

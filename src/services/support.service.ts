@@ -1,4 +1,5 @@
 import httpStatus from 'http-status';
+import mongoose from 'mongoose';
 import config from '../config/config.js';
 import { ApiError } from '../utils/ApiError.js';
 import { createResponse, escapeRegExp, toObjectId } from './common.service.js';
@@ -19,6 +20,7 @@ import type {
   SupportStatus,
 } from '../models/support-ticket.model.js';
 import { SupportMessage } from '../models/support-message.model.js';
+import { Faq } from '../models/support-faq.model.js';
 import type {
   ISupportAttachment,
   ISupportMessage,
@@ -27,6 +29,10 @@ import type {
 import { getOrgQuota, getOrgSummary } from './user/org-dashboard.service.js';
 import { scrubErrorSummary } from '../utils/dashboard-scrub.js';
 import { enqueueSupportNotification } from '../queues/support.queue.js';
+import {
+  saveAttachments,
+  deleteStoredFiles,
+} from './support-storage.service.js';
 
 const MAX_SMART_CONTEXT_BYTES = 8192;
 
@@ -66,9 +72,7 @@ const CLIENT_INFO_LIMITS: Record<string, number> = {
   app_path: 300,
 };
 
-const sanitizeClientInfo = (
-  input: unknown,
-): Record<string, string> | null => {
+const sanitizeClientInfo = (input: unknown): Record<string, string> | null => {
   if (!input || typeof input !== 'object') return null;
   const source = input as Record<string, unknown>;
   const out: Record<string, string> = {};
@@ -119,7 +123,11 @@ const buildSmartContext = async (
         .select('first_name last_name role')
         .lean();
       reporter = user
-        ? { user_id: String((user as any)._id), role: user.role, name: nameOf(user) }
+        ? {
+            user_id: String((user as any)._id),
+            role: user.role,
+            name: nameOf(user),
+          }
         : null;
     }
   } catch {
@@ -198,7 +206,8 @@ const buildSmartContext = async (
   try {
     if (Buffer.byteLength(JSON.stringify(ctx)) > MAX_SMART_CONTEXT_BYTES) {
       ctx.recent_errors = null;
-      if (!unavailable.includes('recent_errors')) unavailable.push('recent_errors');
+      if (!unavailable.includes('recent_errors'))
+        unavailable.push('recent_errors');
       if (Buffer.byteLength(JSON.stringify(ctx)) > MAX_SMART_CONTEXT_BYTES) {
         ctx.usage = null;
         ctx.webhook = null;
@@ -247,7 +256,9 @@ const buildRelations = async (
   return {
     staff,
     userMap: new Map(users.map((u: any) => [String(u._id), nameOf(u)])),
-    orgMap: new Map(orgs.map((o: any) => [String(o._id), o.company_name ?? null])),
+    orgMap: new Map(
+      orgs.map((o: any) => [String(o._id), o.company_name ?? null]),
+    ),
   };
 };
 
@@ -266,13 +277,15 @@ const computeAwaiting = (ticket: any) => {
     const age = Math.floor(
       (now - new Date(ticket.last_customer_message_at).getTime()) / 1000,
     );
-    return { kind: 'staff', age_seconds: age, overdue: age * 1000 > thresholdMs };
+    return {
+      kind: 'staff',
+      age_seconds: age,
+      overdue: age * 1000 > thresholdMs,
+    };
   }
 
   if (ticket.status === 'resolved' || ticket.status === 'closed') return null;
-  const age = Math.floor(
-    (now - new Date(ticket.created_at).getTime()) / 1000,
-  );
+  const age = Math.floor((now - new Date(ticket.created_at).getTime()) / 1000);
   return {
     kind: 'first_response',
     age_seconds: age,
@@ -284,6 +297,51 @@ const senderLabel = (message: any, staff: boolean): string => {
   if (message.sender_role === 'SUPER_ADMIN') return 'ScanFlow Support';
   if (message.sender_role === 'system') return 'System';
   return staff ? 'Customer' : 'You';
+};
+
+/**
+ * Plain-text preview of a message for the chat list. Attachment-only messages
+ * fall back to a placeholder; the result is capped at 80 characters.
+ */
+const PREVIEW_MAX = 80;
+export const buildPreview = (
+  body: unknown,
+  hasAttachments: boolean,
+): string => {
+  const text = typeof body === 'string' ? body.replace(/\s+/g, ' ').trim() : '';
+  if (!text) return hasAttachments ? '📎 Attachment' : '';
+  return text.slice(0, PREVIEW_MAX);
+};
+
+/**
+ * Server-side "whose turn is it" derived from the existing timestamps and
+ * status, so the rule lives in one tested place.
+ *  - customer view: true when the ticket is `waiting_for_customer` (a staff
+ *    reply is the last word).
+ *  - staff view: true when the ball is in the staff court — a fresh `open`
+ *    ticket (never answered) or an `in_progress` ticket whose last customer
+ *    message is newer than the last staff message.
+ */
+const computeYourTurn = (ticket: any, staff: boolean): boolean => {
+  if (!staff) return ticket.status === 'waiting_for_customer';
+  if (ticket.status === 'open') return true;
+  if (ticket.status !== 'in_progress') return false;
+  if (!ticket.last_customer_message_at) return false;
+  return (
+    !ticket.last_staff_message_at ||
+    new Date(ticket.last_customer_message_at).getTime() >
+      new Date(ticket.last_staff_message_at).getTime()
+  );
+};
+
+const serializeLastPublicMessage = (ticket: any) => {
+  const preview = ticket.last_public_message;
+  if (!preview) return null;
+  return {
+    preview: preview.preview ?? '',
+    by_role: preview.by_role ?? '',
+    at: preview.at ?? null,
+  };
 };
 
 const serializeMessage = (message: any, staff: boolean) => {
@@ -323,6 +381,11 @@ const serializeTicket = (
     closed_at: ticket.closed_at ?? null,
     last_customer_message_at: ticket.last_customer_message_at ?? null,
     last_staff_message_at: ticket.last_staff_message_at ?? null,
+    last_public_message: serializeLastPublicMessage(ticket),
+    your_turn: computeYourTurn(ticket, staff),
+    related_faq_id: ticket.related_faq_id
+      ? String(ticket.related_faq_id)
+      : null,
     created_by: ticket.created_by
       ? {
           id: String(ticket.created_by),
@@ -381,7 +444,11 @@ export const getAttachment = async (
   });
   if (!message) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
 
-  if (!Number.isInteger(index) || index < 0 || index >= (message.attachments?.length ?? 0)) {
+  if (
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= (message.attachments?.length ?? 0)
+  ) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
   }
   return message.attachments[index] as ISupportAttachment;
@@ -413,6 +480,7 @@ export interface CreateTicketBody {
   priority?: SupportPriority;
   description: string;
   organization_id?: string;
+  related_faq_id?: string;
   client_info?: Record<string, any>;
 }
 
@@ -423,14 +491,10 @@ export interface CreateTicketBody {
 export const createTicket = async (
   reqUser: any,
   body: CreateTicketBody,
-  attachments: ISupportAttachment[] = [],
+  files: Express.Multer.File[] = [],
 ) => {
   const staff = isStaff(reqUser);
-  if (
-    !staff &&
-    body.priority &&
-    !['normal', 'high'].includes(body.priority)
-  ) {
+  if (!staff && body.priority && !['normal', 'high'].includes(body.priority)) {
     throw new ApiError(
       httpStatus.BAD_REQUEST,
       'Priority must be normal or high.',
@@ -455,34 +519,73 @@ export const createTicket = async (
   const seq = await nextTicketSeq();
   const now = new Date();
   const smart_context = await buildSmartContext(orgScope, reqUser._id);
+  const ticketId = new mongoose.Types.ObjectId();
 
-  const ticket = await SupportTicket.create({
-    ticket_no: `SF-${seq}`,
-    organization_id: orgScope,
-    created_by: reqUser._id,
-    subject: body.subject,
-    category: body.category,
-    priority: body.priority ?? 'normal',
-    status: 'open',
-    assigned_to: null,
-    last_message_at: now,
-    last_customer_message_at: now,
-    last_staff_message_at: null,
-    first_response_at: null,
-    client_info: sanitizeClientInfo(body.client_info),
-    smart_context,
+  let related_faq_id: mongoose.Types.ObjectId | null = null;
+  if (body.related_faq_id) {
+    const faq = await Faq.findOne({
+      _id: toObjectId(body.related_faq_id),
+      status: 1,
+    })
+      .select('_id')
+      .lean();
+    if (!faq) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        'Referenced FAQ is not available.',
+      );
+    }
+    related_faq_id = new mongoose.Types.ObjectId(body.related_faq_id);
+  }
+
+  const attachments = await saveAttachments(files, {
+    organizationId: String(orgScope),
+    ticketId: String(ticketId),
   });
 
-  await SupportMessage.create({
-    ticket_id: ticket._id,
-    organization_id: orgScope,
-    sender_id: reqUser._id,
-    sender_role: reqUser.role,
-    kind: 'reply',
-    is_internal: false,
-    body: body.description,
-    attachments,
-  });
+  const firstPreview = {
+    preview: buildPreview(body.description, attachments.length > 0),
+    by_role: reqUser.role,
+    at: now,
+  };
+
+  let ticket: ISupportTicket;
+  try {
+    ticket = await SupportTicket.create({
+      _id: ticketId,
+      ticket_no: `SF-${seq}`,
+      organization_id: orgScope,
+      created_by: reqUser._id,
+      subject: body.subject,
+      category: body.category,
+      priority: body.priority ?? 'normal',
+      status: 'open',
+      assigned_to: null,
+      last_message_at: now,
+      last_customer_message_at: now,
+      last_staff_message_at: null,
+      first_response_at: null,
+      last_public_message: firstPreview,
+      related_faq_id,
+      client_info: sanitizeClientInfo(body.client_info),
+      smart_context,
+    });
+
+    await SupportMessage.create({
+      ticket_id: ticket._id,
+      organization_id: orgScope,
+      sender_id: reqUser._id,
+      sender_role: reqUser.role,
+      kind: 'reply',
+      is_internal: false,
+      body: body.description,
+      attachments,
+    });
+  } catch (error) {
+    await deleteStoredFiles(attachments);
+    await SupportTicket.deleteOne({ _id: ticketId }).catch(() => null);
+    throw error;
+  }
 
   void enqueueSupportNotification({
     event: 'ticket_created',
@@ -496,7 +599,13 @@ export const createTicket = async (
   return createResponse(
     httpStatus.CREATED,
     'Support ticket created successfully.',
-    { ticket: serializeTicket(ticket, relations, firstMessage ? [firstMessage] : []) },
+    {
+      ticket: serializeTicket(
+        ticket,
+        relations,
+        firstMessage ? [firstMessage] : [],
+      ),
+    },
   );
 };
 
@@ -562,7 +671,20 @@ export const listTickets = async (
 
   if (filter.search) {
     const regex = new RegExp(escapeRegExp(String(filter.search)), 'i');
-    query.$or = [{ ticket_no: regex }, { subject: regex }];
+    const searchOr = [{ ticket_no: regex }, { subject: regex }];
+
+    // `applyView` may already have written `$or` (awaiting_staff). Combine the
+    // two with `$and` so the view filter is not silently replaced by search.
+    if (query.$or) {
+      query.$and = [
+        ...(query.$and ?? []),
+        { $or: query.$or },
+        { $or: searchOr },
+      ];
+      delete query.$or;
+    } else {
+      query.$or = searchOr;
+    }
   }
 
   const tickets = await (SupportTicket as any).paginate(query, {
@@ -576,13 +698,17 @@ export const listTickets = async (
     serializeTicket(ticket, relations),
   );
 
-  return createResponse(httpStatus.OK, 'Support tickets fetched successfully.', {
-    results,
-    page: tickets.page,
-    limit: tickets.limit,
-    total_pages: tickets.total_pages,
-    total_results: tickets.total_results,
-  });
+  return createResponse(
+    httpStatus.OK,
+    'Support tickets fetched successfully.',
+    {
+      results,
+      page: tickets.page,
+      limit: tickets.limit,
+      total_pages: tickets.total_pages,
+      total_results: tickets.total_results,
+    },
+  );
 };
 
 export const getTicketDetail = async (reqUser: any, ticketId: string) => {
@@ -603,30 +729,118 @@ export const getTicketDetail = async (reqUser: any, ticketId: string) => {
   };
   if (!staff) messageQuery.is_internal = false;
 
-  const messages: ISupportMessage[] = await SupportMessage.find(messageQuery).sort(
-    { created_at: 1 },
-  );
+  const messages: ISupportMessage[] = await SupportMessage.find(
+    messageQuery,
+  ).sort({ created_at: 1 });
 
   const relations = await buildRelations([ticket], staff);
+  return createResponse(httpStatus.OK, 'Support ticket fetched successfully.', {
+    ticket: serializeTicket(ticket, relations, messages),
+  });
+};
+
+/**
+ * Cursor-paginated messages for the chat UI. `before` pages older (scrolling
+ * up), `after` fetches only new messages (polling). The same single visibility
+ * rule as `getTicketDetail`: non-staff never receive internal messages. The
+ * ticket's current state is returned alongside so the header/list row can
+ * update from the same cheap request. `GET /tickets/:id` is unchanged and still
+ * returns the full thread.
+ */
+export const listMessages = async (
+  reqUser: any,
+  ticketId: string,
+  params: { before?: string; after?: string; limit?: number },
+) => {
+  const staff = isStaff(reqUser);
+  const orgScope = resolveOrganizationScope(reqUser, undefined);
+
+  const ticketQuery: Record<string, any> = { _id: toObjectId(ticketId) };
+  if (orgScope) ticketQuery.organization_id = orgScope;
+  const ticket = await SupportTicket.findOne(ticketQuery).select(
+    staff ? '+smart_context +client_info' : '',
+  );
+  if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Ticket not found');
+
+  const limit = Math.min(Math.max(params.limit ?? 30, 1), 50);
+
+  const base: Record<string, any> = {
+    ticket_id: ticket._id,
+    organization_id: ticket.organization_id,
+  };
+  if (!staff) base.is_internal = false;
+
+  const sortDir = params.after ? 1 : -1;
+  const messageQuery: Record<string, any> = { ...base };
+  if (params.after) {
+    messageQuery.created_at = { $gt: new Date(params.after) };
+  } else if (params.before) {
+    messageQuery.created_at = { $lt: new Date(params.before) };
+  }
+
+  const raw = await SupportMessage.find(messageQuery)
+    .sort({ created_at: sortDir, _id: sortDir })
+    .limit(limit + 1)
+    .maxTimeMS(5000);
+
+  const hasMore = raw.length > limit;
+  const page = raw.slice(0, limit);
+  // Return in chronological order regardless of the query direction.
+  if (!params.after) page.reverse();
+
+  const relations = await buildRelations([ticket], staff);
+  const ticketState = serializeTicket(ticket, relations);
+
   return createResponse(
     httpStatus.OK,
-    'Support ticket fetched successfully.',
-    { ticket: serializeTicket(ticket, relations, messages) },
+    'Support messages fetched successfully.',
+    {
+      results: page.map((m) => serializeMessage(m, staff)),
+      has_more: hasMore,
+      ticket: {
+        status: ticketState.status,
+        priority: ticketState.priority,
+        updated_at: ticketState.updated_at,
+        last_public_message: ticketState.last_public_message,
+      },
+    },
   );
 };
 
 export interface ReplyBody {
   message: string;
+  client_message_id?: string;
 }
 
 export const addMessage = async (
   reqUser: any,
   ticketId: string,
   body: ReplyBody,
-  attachments: ISupportAttachment[] = [],
+  files: Express.Multer.File[] = [],
 ) => {
   const staff = isStaff(reqUser);
   const ticket = await loadTicketForWrite(reqUser, ticketId);
+
+  // Idempotency: a retried reply carrying the same client_message_id returns
+  // the existing message instead of inserting a duplicate (mirrors
+  // `client_scan_id` in scans.service.ts).
+  const clientMessageId = body.client_message_id
+    ? String(body.client_message_id).trim() || null
+    : null;
+  if (clientMessageId) {
+    const existing = await SupportMessage.findOne({
+      ticket_id: ticket._id,
+      client_message_id: clientMessageId,
+    });
+    if (existing) {
+      const relations = await buildRelations([ticket], staff);
+      return createResponse(httpStatus.OK, 'Reply already exists.', {
+        ticket: serializeTicket(ticket, relations),
+        message: serializeMessage(existing, staff),
+      });
+    }
+  }
+
   if (ticket.status === 'closed') {
     throw new ApiError(
       httpStatus.CONFLICT,
@@ -634,19 +848,53 @@ export const addMessage = async (
     );
   }
 
-  const now = new Date();
-  const message = await SupportMessage.create({
-    ticket_id: ticket._id,
-    organization_id: ticket.organization_id,
-    sender_id: reqUser._id,
-    sender_role: reqUser.role,
-    kind: 'reply',
-    is_internal: false,
-    body: body.message,
-    attachments,
+  const attachments = await saveAttachments(files, {
+    organizationId: String(ticket.organization_id),
+    ticketId: String(ticket._id),
   });
 
-  const updates: Record<string, any> = { last_message_at: now };
+  const now = new Date();
+  let message: ISupportMessage;
+  try {
+    message = await SupportMessage.create({
+      ticket_id: ticket._id,
+      organization_id: ticket.organization_id,
+      sender_id: reqUser._id,
+      sender_role: reqUser.role,
+      kind: 'reply',
+      is_internal: false,
+      body: body.message,
+      attachments,
+      client_message_id: clientMessageId,
+    });
+  } catch (error: any) {
+    await deleteStoredFiles(attachments);
+    // Concurrent duplicate: the unique index rejected the second insert, so
+    // return the row the other request created.
+    if (error?.code === 11000 && clientMessageId) {
+      const dup = await SupportMessage.findOne({
+        ticket_id: ticket._id,
+        client_message_id: clientMessageId,
+      });
+      if (dup) {
+        const relations = await buildRelations([ticket], staff);
+        return createResponse(httpStatus.OK, 'Reply already exists.', {
+          ticket: serializeTicket(ticket, relations),
+          message: serializeMessage(dup, staff),
+        });
+      }
+    }
+    throw error;
+  }
+
+  const updates: Record<string, any> = {
+    last_message_at: now,
+    last_public_message: {
+      preview: buildPreview(body.message, attachments.length > 0),
+      by_role: reqUser.role,
+      at: now,
+    },
+  };
   if (staff) {
     updates.last_staff_message_at = now;
     if (!ticket.first_response_at) updates.first_response_at = now;
@@ -659,7 +907,11 @@ export const addMessage = async (
 
   if (ticket.status === 'resolved') {
     nextStatus = staff ? 'in_progress' : 'open';
-    events.push({ type: 'status_changed', from: ticket.status, to: nextStatus });
+    events.push({
+      type: 'status_changed',
+      from: ticket.status,
+      to: nextStatus,
+    });
     events.push({ type: 'reopened', from: ticket.status, to: nextStatus });
     updates.resolved_at = null;
   } else if (!staff && ticket.status === 'waiting_for_customer') {
@@ -723,7 +975,14 @@ export const closeTicket = async (reqUser: any, ticketId: string) => {
   await SupportTicket.findByIdAndUpdate(ticket._id, {
     $set: { status: 'closed', closed_at: now, last_message_at: now },
   });
-  await writeEvent(ticket, 'closed', ticket.status, 'closed', false, reqUser._id);
+  await writeEvent(
+    ticket,
+    'closed',
+    ticket.status,
+    'closed',
+    false,
+    reqUser._id,
+  );
 
   void enqueueSupportNotification({
     event: 'status_changed',
@@ -732,7 +991,10 @@ export const closeTicket = async (reqUser: any, ticketId: string) => {
   }).catch(() => null);
 
   const updated = await SupportTicket.findById(ticket._id);
-  const updatedRelations = await buildRelations([updated ?? ticket], isStaff(reqUser));
+  const updatedRelations = await buildRelations(
+    [updated ?? ticket],
+    isStaff(reqUser),
+  );
   return createResponse(httpStatus.OK, 'Ticket closed successfully.', {
     ticket: serializeTicket(updated ?? ticket, updatedRelations),
   });
@@ -763,7 +1025,9 @@ export const addNote = async (
     ticket_id: ticket._id,
     kind: 'note',
     sender_id: reqUser._id,
-  }).sort({ created_at: -1 }).lean();
+  })
+    .sort({ created_at: -1 })
+    .lean();
 
   const updated = await SupportTicket.findById(ticket._id);
   const relations = await buildRelations([updated ?? ticket], true);
@@ -882,20 +1146,24 @@ export const updateTicket = async (
   });
 };
 
-export const getSummary = async (reqUser: any) => {
+export const getSummary = async (reqUser: any, organizationId?: string) => {
   const staff = isStaff(reqUser);
-  const orgScope = resolveOrganizationScope(reqUser, undefined);
+  const orgScope = resolveOrganizationScope(reqUser, organizationId);
 
-  if (staff && !orgScope) {
+  if (staff) {
+    const base: Record<string, any> = {};
+    if (orgScope) base.organization_id = orgScope;
     const threshold = new Date(
       Date.now() - config.support.firstResponseHours * 3600000,
     );
     const [unassigned, awaiting_staff, overdue, active] = await Promise.all([
       SupportTicket.countDocuments({
+        ...base,
         status: { $in: ACTIVE_SUPPORT_STATUSES },
         assigned_to: null,
       }),
       SupportTicket.countDocuments({
+        ...base,
         $or: [
           { status: 'open' },
           {
@@ -907,18 +1175,26 @@ export const getSummary = async (reqUser: any) => {
         ],
       }),
       SupportTicket.countDocuments({
+        ...base,
         status: { $in: ACTIVE_SUPPORT_STATUSES },
         first_response_at: null,
         created_at: { $lte: threshold },
       }),
-      SupportTicket.countDocuments({ status: { $in: ACTIVE_SUPPORT_STATUSES } }),
+      SupportTicket.countDocuments({
+        ...base,
+        status: { $in: ACTIVE_SUPPORT_STATUSES },
+      }),
     ]);
-    return createResponse(httpStatus.OK, 'Support summary fetched successfully.', {
-      unassigned,
-      awaiting_staff,
-      overdue,
-      active,
-    });
+    return createResponse(
+      httpStatus.OK,
+      'Support summary fetched successfully.',
+      {
+        unassigned,
+        awaiting_staff,
+        overdue,
+        active,
+      },
+    );
   }
 
   const base: Record<string, any> = {};
@@ -931,10 +1207,14 @@ export const getSummary = async (reqUser: any) => {
     SupportTicket.countDocuments({ ...base, status: 'waiting_for_customer' }),
   ]);
 
-  return createResponse(httpStatus.OK, 'Support summary fetched successfully.', {
-    active,
-    awaiting_customer,
-  });
+  return createResponse(
+    httpStatus.OK,
+    'Support summary fetched successfully.',
+    {
+      active,
+      awaiting_customer,
+    },
+  );
 };
 
 export const listStaff = async () => {
@@ -955,9 +1235,7 @@ export const listStaff = async () => {
  * SUPPORT_AUTOCLOSE_DAYS. Run from the worker.
  */
 export const runAutoCloseJob = async (): Promise<number> => {
-  const cutoff = new Date(
-    Date.now() - config.support.autocloseDays * 86400000,
-  );
+  const cutoff = new Date(Date.now() - config.support.autocloseDays * 86400000);
   const stale = await SupportTicket.find({
     status: 'resolved',
     resolved_at: { $lte: cutoff },
@@ -968,14 +1246,7 @@ export const runAutoCloseJob = async (): Promise<number> => {
     await SupportTicket.findByIdAndUpdate(ticket._id, {
       $set: { status: 'closed', closed_at: now, last_message_at: now },
     });
-    await writeEvent(
-      ticket,
-      'closed',
-      'resolved',
-      'closed',
-      false,
-      undefined,
-    );
+    await writeEvent(ticket, 'closed', 'resolved', 'closed', false, undefined);
   }
   return stale.length;
 };

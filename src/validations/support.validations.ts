@@ -55,12 +55,24 @@ export const createTicket = {
       'any.required': 'Description is required',
     }),
     organization_id: Joi.string().custom(objectId).optional(),
-    client_info: Joi.object()
-      .keys({
-        user_agent: Joi.string().trim().max(500).allow(''),
-        device_id: Joi.string().trim().max(200).allow(''),
-        app_path: Joi.string().trim().max(300).allow(''),
-      })
+    related_faq_id: Joi.string().custom(objectId).optional(),
+    client_info: Joi.alternatives()
+      .try(
+        Joi.object().keys({
+          user_agent: Joi.string().trim().max(500).allow(''),
+          device_id: Joi.string().trim().max(200).allow(''),
+          app_path: Joi.string().trim().max(300).allow(''),
+        }),
+        Joi.string()
+          .trim()
+          .custom((value, helpers) => {
+            try {
+              return JSON.parse(value);
+            } catch {
+              return helpers.error('any.invalid');
+            }
+          }),
+      )
       .optional(),
   }),
 };
@@ -92,6 +104,15 @@ export const getTicket = {
   ...ticketIdParams,
 };
 
+export const listMessages = {
+  ...ticketIdParams,
+  query: Joi.object().keys({
+    before: Joi.string().isoDate().optional(),
+    after: Joi.string().isoDate().optional(),
+    limit: Joi.number().integer().min(1).max(50).optional(),
+  }),
+};
+
 export const addMessage = {
   ...ticketIdParams,
   body: Joi.object().keys({
@@ -100,6 +121,7 @@ export const addMessage = {
       'any.required': 'Message is required',
       'string.max': 'Message must be at most 5000 characters',
     }),
+    client_message_id: Joi.string().trim().min(1).max(100).optional(),
   }),
 };
 
@@ -132,7 +154,8 @@ export const updateTicket = {
     })
     .min(1)
     .messages({
-      'object.min': 'At least one of status, priority or assigned_to is required',
+      'object.min':
+        'At least one of status, priority or assigned_to is required',
     }),
 };
 
@@ -140,9 +163,7 @@ export const downloadAttachment = {
   params: Joi.object().keys({
     ticketId: Joi.string().custom(objectId).required(),
     messageId: Joi.string().custom(objectId).required(),
-    index: Joi.string()
-      .pattern(/^\d+$/)
-      .required(),
+    index: Joi.string().pattern(/^\d+$/).required(),
   }),
 };
 

@@ -4,6 +4,7 @@ import {
   disconnectDb,
   clearDb,
   dropCollections,
+  ensureSupportIndexes,
 } from './helpers.js';
 import { getRedis } from '../src/queues/redis.js';
 
@@ -11,6 +12,7 @@ beforeAll(async () => {
   await connectDb();
   // purge stale camelCase indexes from earlier schema versions
   await dropCollections();
+  await ensureSupportIndexes();
 });
 
 afterEach(async () => {
