@@ -97,6 +97,37 @@ const envVarsSchema = Joi.object()
     DASHBOARD_CHART_CACHE_SECONDS: Joi.number()
       .default(300)
       .description('freshness window for dashboard chart widgets'),
+    SUPPORT_NOTIFY_EMAILS: Joi.string()
+      .allow('')
+      .description(
+        'comma-separated support notification recipients; empty → all active super admins',
+      ),
+    SUPPORT_FIRST_RESPONSE_HOURS: Joi.number()
+      .default(24)
+      .description('staff-only overdue highlight threshold (hours)'),
+    SUPPORT_AUTOCLOSE_DAYS: Joi.number()
+      .default(7)
+      .description('days after which a resolved ticket is auto-closed'),
+    SUPPORT_MAX_ATTACHMENT_MB: Joi.number()
+      .default(5)
+      .description('max size of a single support attachment in MB'),
+    SUPPORT_STORAGE_DRIVER: Joi.string()
+      .valid('local', 's3')
+      .default('local')
+      .description('attachment storage driver'),
+    SUPPORT_UPLOAD_DIR: Joi.string()
+      .allow('')
+      .default('/data/support-uploads')
+      .description('local directory for support attachments (shared volume)'),
+    SUPPORT_RATE_CREATE_PER_HOUR: Joi.number()
+      .default(10)
+      .description('max support tickets a user may create per hour'),
+    SUPPORT_RATE_REPLY_PER_HOUR: Joi.number()
+      .default(60)
+      .description('max support replies a user may send per hour'),
+    SUPPORT_MAX_ACTIVE_PER_ORG: Joi.number()
+      .default(25)
+      .description('max simultaneously active tickets per organization'),
     STRIPE_SECRET_KEY: Joi.string().allow('').description('Stripe secret key'),
     STRIPE_WEBHOOK_SECRET: Joi.string()
       .allow('')
@@ -185,6 +216,17 @@ export const config = {
     nearLimitPct: envVars.DASHBOARD_NEAR_LIMIT_PCT,
     cacheFreshSeconds: envVars.DASHBOARD_CACHE_FRESH_SECONDS,
     chartCacheSeconds: envVars.DASHBOARD_CHART_CACHE_SECONDS,
+  },
+  support: {
+    notifyEmails: envVars.SUPPORT_NOTIFY_EMAILS,
+    firstResponseHours: envVars.SUPPORT_FIRST_RESPONSE_HOURS,
+    autocloseDays: envVars.SUPPORT_AUTOCLOSE_DAYS,
+    maxAttachmentMb: envVars.SUPPORT_MAX_ATTACHMENT_MB,
+    storageDriver: envVars.SUPPORT_STORAGE_DRIVER as 'local' | 's3',
+    uploadDir: envVars.SUPPORT_UPLOAD_DIR,
+    rateCreatePerHour: envVars.SUPPORT_RATE_CREATE_PER_HOUR,
+    rateReplyPerHour: envVars.SUPPORT_RATE_REPLY_PER_HOUR,
+    maxActivePerOrg: envVars.SUPPORT_MAX_ACTIVE_PER_ORG,
   },
   stripe: {
     secretKey: envVars.STRIPE_SECRET_KEY,

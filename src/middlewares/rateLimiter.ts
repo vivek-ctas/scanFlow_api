@@ -1,5 +1,11 @@
 import rateLimit from 'express-rate-limit';
 import { Request } from 'express';
+import config from '../config/config.js';
+
+const userKey = (req: Request) => {
+  const userId = (req.user as any)?._id ?? req.ip ?? 'unknown';
+  return String(userId);
+};
 
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -32,4 +38,22 @@ export const orgDashboardLimiter = rateLimit({
     const userId = (req.user as any)?._id ?? req.ip ?? 'unknown';
     return String(userId);
   },
+});
+
+/** Per-user cap on support ticket creation (default 10/hour). */
+export const supportCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: config.support.rateCreatePerHour,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userKey,
+});
+
+/** Per-user cap on support replies/notes (default 60/hour). */
+export const supportReplyLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: config.support.rateReplyPerHour,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userKey,
 });

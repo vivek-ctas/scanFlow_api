@@ -212,6 +212,20 @@ export const batchCreateScans = async (
   return createResponse(httpStatus.OK, 'Batch processed.', { results });
 };
 
+const toSortBy = (sortBy?: string): string => {
+  if (!sortBy) return 'scanned_at:desc';
+  return sortBy
+    .split(',')
+    .map((option) => option.trim())
+    .filter(Boolean)
+    .map((option) => {
+      if (option.includes(':')) return option;
+      if (option.startsWith('-')) return `${option.slice(1)}:desc`;
+      return `${option}:asc`;
+    })
+    .join(',');
+};
+
 export const listScans = async (
   filter: Record<string, any>,
   options: Record<string, any>,
@@ -230,9 +244,30 @@ export const listScans = async (
     query.barcode = filter.barcode;
   }
 
-  const scans = await (Scan as any).paginate(query, options);
+  const scans = await (Scan as any).paginate(query, {
+    ...options,
+    sortBy: toSortBy(options.sort_by ?? options.sortBy),
+    populate: 'user_id',
+  });
+
+  // Flatten the populated operator into a display name and restore `user_id`
+  // to a plain id, so existing consumers keep working unchanged.
+  const results = scans.results.map((scan: any) => {
+    const json = typeof scan.toJSON === 'function' ? scan.toJSON() : scan;
+    const user =
+      json.user_id && typeof json.user_id === 'object' ? json.user_id : null;
+    const name = user
+      ? [user.first_name, user.last_name].filter(Boolean).join(' ')
+      : '';
+    return {
+      ...json,
+      user_id: user ? (user.id ?? String(user._id)) : json.user_id,
+      operator_name: name || null,
+    };
+  });
+
   return createResponse(httpStatus.OK, 'Scans fetched successfully.', {
-    results: scans.results,
+    results,
     page: scans.page,
     limit: scans.limit,
     total_pages: scans.total_pages,

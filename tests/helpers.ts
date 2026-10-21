@@ -15,6 +15,7 @@ import {
   Country,
   WebSettings,
   SystemError,
+  Counter,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -77,6 +78,7 @@ const MODELS = [
   Country,
   WebSettings,
   SystemError,
+  Counter,
 ];
 
 export const clearDb = async (): Promise<void> => {

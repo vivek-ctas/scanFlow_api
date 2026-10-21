@@ -324,6 +324,78 @@ export const sendContactReplyEmail = async (
   );
 };
 
+const SUPPORT_EMAIL_COPY: Record<
+  string,
+  { headerTitle: string; headerSubtitle: string; subject: string }
+> = {
+  ticket_created: {
+    headerTitle: 'New support ticket',
+    headerSubtitle: 'A customer opened a new support ticket.',
+    subject: 'New ScanFlow support ticket',
+  },
+  customer_replied: {
+    headerTitle: 'New reply on a support ticket',
+    headerSubtitle: 'A customer replied to a support ticket.',
+    subject: 'New reply on a ScanFlow support ticket',
+  },
+  staff_replied: {
+    headerTitle: 'ScanFlow Support replied',
+    headerSubtitle: 'The support team has replied to your ticket.',
+    subject: 'ScanFlow Support replied to your ticket',
+  },
+  status_changed: {
+    headerTitle: 'Support ticket updated',
+    headerSubtitle: 'The status of your support ticket has changed.',
+    subject: 'Your ScanFlow support ticket was updated',
+  },
+};
+
+/**
+ * Support notification email. Intentionally excludes the message body — it
+ * states the ticket number, subject and a link into the authenticated panel.
+ * Context is a weaker channel than the panel.
+ */
+export const sendSupportNotificationEmail = async (
+  to: string,
+  info: {
+    ticket_no: string;
+    subject: string;
+    status: string;
+    event: string;
+    url: string;
+  },
+) => {
+  const copy = SUPPORT_EMAIL_COPY[info.event] ?? {
+    headerTitle: 'Support ticket update',
+    headerSubtitle: 'There is an update on a ScanFlow support ticket.',
+    subject: 'ScanFlow support ticket update',
+  };
+
+  const content = `
+    <p style="margin:0 0 16px;font-size:14px;line-height:1.6;color:#4B5563;">
+      <strong>Ticket:</strong> ${escape(info.ticket_no)}<br/>
+      <strong>Subject:</strong> ${escape(info.subject)}<br/>
+      <strong>Status:</strong> ${escape(info.status)}
+    </p>
+    <p style="margin:0 0 24px;font-size:14px;line-height:1.6;color:#4B5563;">
+      <a href="${info.url}" style="display:inline-block;background:#13355A;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:6px;font-weight:600;">View ticket</a>
+    </p>
+  `;
+
+  return deliverTyped(
+    to,
+    `${copy.subject} — ${info.ticket_no}`,
+    renderEmailLayout({
+      appName: DEFAULT_COMPANY_NAME,
+      headerTitle: copy.headerTitle,
+      headerSubtitle: copy.headerSubtitle,
+      supportEmail: DEFAULT_SUPPORT_EMAIL,
+      content,
+    }),
+    `${copy.subject} ${info.ticket_no}`,
+  );
+};
+
 function escape(value: string | number | null | undefined): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')

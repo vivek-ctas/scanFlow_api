@@ -14,3 +14,6 @@ export { WebhookConfig } from './webhook-config.model.js';
 export { WebhookDelivery } from './webhook-delivery.model.js';
 export { Country } from './country.model.js';
 export { WebSettings } from './web-settings.model.js';
+export { Counter } from './counter.model.js';
+export { SupportTicket } from './support-ticket.model.js';
+export { SupportMessage } from './support-message.model.js';
