@@ -71,6 +71,8 @@ export interface ISupportTicket extends Document {
   related_faq_id?: mongoose.Types.ObjectId | null;
   smart_context?: Record<string, any> | null;
   client_info?: Record<string, any> | null;
+  /** Per-user last read timestamp (Map: userId -> Date). */
+  last_read_at?: Map<string, Date>;
   created_at: Date;
   updated_at: Date;
 }
@@ -150,6 +152,12 @@ const supportTicketSchema = new Schema<ISupportTicket, ISupportTicketModel>(
       default: null,
       select: false,
       private: true,
+    },
+    /** Per-user last read timestamp (Map: userId -> Date). */
+    last_read_at: {
+      type: Map,
+      of: Date,
+      default: {},
     },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
