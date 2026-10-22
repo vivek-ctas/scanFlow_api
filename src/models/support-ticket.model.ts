@@ -13,11 +13,7 @@ export type SupportCategory =
 export type SupportPriority = 'low' | 'normal' | 'high' | 'critical';
 
 export type SupportStatus =
-  | 'open'
-  | 'in_progress'
-  | 'waiting_for_customer'
-  | 'resolved'
-  | 'closed';
+  'open' | 'in_progress' | 'waiting_for_customer' | 'resolved' | 'closed';
 
 export const SUPPORT_CATEGORIES: SupportCategory[] = [
   'scanner',
@@ -50,6 +46,12 @@ export const ACTIVE_SUPPORT_STATUSES: SupportStatus[] = [
   'waiting_for_customer',
 ];
 
+export interface ISupportLastPublicMessage {
+  preview: string;
+  by_role: string;
+  at: Date;
+}
+
 export interface ISupportTicket extends Document {
   ticket_no: string;
   organization_id: mongoose.Types.ObjectId;
@@ -65,6 +67,8 @@ export interface ISupportTicket extends Document {
   first_response_at?: Date | null;
   resolved_at?: Date | null;
   closed_at?: Date | null;
+  last_public_message?: ISupportLastPublicMessage | null;
+  related_faq_id?: mongoose.Types.ObjectId | null;
   smart_context?: Record<string, any> | null;
   client_info?: Record<string, any> | null;
   created_at: Date;
@@ -78,10 +82,16 @@ interface ISupportTicketModel extends Model<ISupportTicket> {
   ) => Promise<any>;
 }
 
-const supportTicketSchema = new Schema<
-  ISupportTicket,
-  ISupportTicketModel
->(
+const supportLastPublicMessageSchema = new Schema<ISupportLastPublicMessage>(
+  {
+    preview: { type: String, trim: true, default: '', maxlength: 80 },
+    by_role: { type: String, trim: true, default: '' },
+    at: { type: Date, default: null },
+  },
+  { _id: false },
+);
+
+const supportTicketSchema = new Schema<ISupportTicket, ISupportTicketModel>(
   {
     ticket_no: { type: String, required: true, unique: true, trim: true },
     organization_id: {
@@ -108,13 +118,26 @@ const supportTicketSchema = new Schema<
       default: 'open',
       index: true,
     },
-    assigned_to: { type: Schema.Types.ObjectId, ref: 'tbl_user', default: null },
+    assigned_to: {
+      type: Schema.Types.ObjectId,
+      ref: 'tbl_user',
+      default: null,
+    },
     last_message_at: { type: Date, default: null },
     last_customer_message_at: { type: Date, default: null },
     last_staff_message_at: { type: Date, default: null },
     first_response_at: { type: Date, default: null },
     resolved_at: { type: Date, default: null },
     closed_at: { type: Date, default: null },
+    last_public_message: {
+      type: supportLastPublicMessageSchema,
+      default: null,
+    },
+    related_faq_id: {
+      type: Schema.Types.ObjectId,
+      ref: 'tbl_faq',
+      default: null,
+    },
     // Staff-only snapshot, never serialised by accident (select:false + private).
     smart_context: {
       type: Schema.Types.Mixed,

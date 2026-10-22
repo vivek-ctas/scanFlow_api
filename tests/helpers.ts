@@ -16,6 +16,8 @@ import {
   WebSettings,
   SystemError,
   Counter,
+  SupportTicket,
+  SupportMessage,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -79,6 +81,8 @@ const MODELS = [
   WebSettings,
   SystemError,
   Counter,
+  SupportTicket,
+  SupportMessage,
 ];
 
 export const clearDb = async (): Promise<void> => {
@@ -96,6 +100,11 @@ export const dropCollections = async (): Promise<void> => {
       }
     }),
   );
+};
+
+export const ensureSupportIndexes = async (): Promise<void> => {
+  await SupportMessage.syncIndexes();
+  await SupportTicket.syncIndexes();
 };
 
 export const createOrg = async (overrides: Record<string, any> = {}) =>

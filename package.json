@@ -21,6 +21,8 @@
     "check-all": "npm run lint && npm run prettier-check",
     "test": "vitest run",
     "webhook:receiver": "node scripts/webhook-receiver.mjs",
+    "load:throughput": "node scripts/load-test.mjs --mode=throughput",
+    "load:quota-boundary": "node scripts/load-test.mjs --mode=quota-boundary",
     "seed:super-admin": "tsx src/scripts/seed-super-admin.ts",
     "seed:demo": "tsx src/scripts/seed-demo-data.ts",
     "migrate:org-company-name": "tsx src/scripts/migrate-org-company-name.ts",
@@ -29,7 +31,9 @@
     "migrate:country-aliases": "tsx src/scripts/migrate-country-aliases.ts",
     "migrate:email-index": "tsx src/scripts/migrate-email-index.ts",
     "migrate:operator-ids": "tsx src/scripts/migrate-operator-ids.ts",
-    "migrate:operator-seq": "tsx src/scripts/migrate-operator-seq.ts"
+    "migrate:operator-seq": "tsx src/scripts/migrate-operator-seq.ts",
+    "backfill:support-last-public-message": "tsx src/scripts/backfill-support-last-public-message.ts",
+    "seed:faqs": "tsx src/scripts/seed-support-faqs.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

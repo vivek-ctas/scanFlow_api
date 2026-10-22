@@ -12,6 +12,8 @@ x-api-base: &api-base
   restart: unless-stopped
   networks:
     - scanflow-shared
+  volumes:
+    - scanflow-support-uploads:${SUPPORT_UPLOAD_DIR:-/data/support-uploads}
   deploy:
     resources:
       limits:
@@ -78,6 +80,7 @@ services:
 
 volumes:
   scanflow-redis-data:
+  scanflow-support-uploads:
 
 networks:
   scanflow-shared:

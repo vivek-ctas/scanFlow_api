@@ -8,6 +8,8 @@ import {
 import { supportUpload } from '../middlewares/supportUpload.js';
 import * as supportController from '../controllers/support.controller.js';
 import * as supportValidation from '../validations/support.validations.js';
+import * as supportFaqController from '../controllers/support-faq.controller.js';
+import * as supportFaqValidation from '../validations/support-faq.validations.js';
 
 const router = Router();
 
@@ -52,6 +54,13 @@ router.get(
   supportController.getTicket,
 );
 
+router.get(
+  '/tickets/:ticketId/messages',
+  auth('viewSupport'),
+  validate(supportValidation.listMessages),
+  supportController.listMessages,
+);
+
 router.post(
   '/tickets/:ticketId/messages',
   auth('viewSupport'),
@@ -84,10 +93,49 @@ router.patch(
   supportController.updateTicket,
 );
 
+router.get('/staff', auth('manageSupport'), supportController.listStaff);
+
+// FAQ routes (no new rights per plan)
 router.get(
-  '/staff',
+  '/faqs',
+  auth('viewSupport'),
+  validate(supportFaqValidation.listFaqs),
+  supportFaqController.listFaqs,
+);
+
+router.get(
+  '/faqs/manage',
   auth('manageSupport'),
-  supportController.listStaff,
+  validate(supportFaqValidation.manageFaqs),
+  supportFaqController.manageFaqs,
+);
+
+router.post(
+  '/faqs',
+  auth('manageSupport'),
+  validate(supportFaqValidation.createFaq),
+  supportFaqController.createFaq,
+);
+
+router.put(
+  '/faqs/:faqId',
+  auth('manageSupport'),
+  validate(supportFaqValidation.updateFaq),
+  supportFaqController.updateFaq,
+);
+
+router.patch(
+  '/faqs/:faqId/update-status',
+  auth('manageSupport'),
+  validate(supportFaqValidation.updateFaqStatus),
+  supportFaqController.updateFaqStatus,
+);
+
+router.delete(
+  '/faqs/:faqId',
+  auth('manageSupport'),
+  validate(supportFaqValidation.deleteFaq),
+  supportFaqController.deleteFaq,
 );
 
 export const supportRouter = router;

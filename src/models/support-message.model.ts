@@ -2,19 +2,12 @@ import mongoose, { Document, Model, Schema } from 'mongoose';
 import { toJSON } from './plugins/toJSON.plugin.js';
 import { paginate } from './plugins/paginate.plugin.js';
 
-export type SupportSenderRole =
-  | 'SUPER_ADMIN'
-  | 'ORGANIZATION_ADMIN'
-  | 'system';
+export type SupportSenderRole = 'SUPER_ADMIN' | 'ORGANIZATION_ADMIN' | 'system';
 
 export type SupportMessageKind = 'reply' | 'note' | 'event';
 
 export type SupportEventType =
-  | 'status_changed'
-  | 'priority_changed'
-  | 'assigned'
-  | 'reopened'
-  | 'closed';
+  'status_changed' | 'priority_changed' | 'assigned' | 'reopened' | 'closed';
 
 export interface ISupportEvent {
   type: SupportEventType;
@@ -39,6 +32,7 @@ export interface ISupportMessage extends Document {
   body: string;
   event?: ISupportEvent | null;
   attachments: ISupportAttachment[];
+  client_message_id?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -79,10 +73,7 @@ const supportAttachmentSchema = new Schema<ISupportAttachment>(
   { _id: false },
 );
 
-const supportMessageSchema = new Schema<
-  ISupportMessage,
-  ISupportMessageModel
->(
+const supportMessageSchema = new Schema<ISupportMessage, ISupportMessageModel>(
   {
     ticket_id: {
       type: Schema.Types.ObjectId,
@@ -111,11 +102,19 @@ const supportMessageSchema = new Schema<
     body: { type: String, trim: true, default: '', maxlength: 5000 },
     event: { type: supportEventSchema, default: null },
     attachments: { type: [supportAttachmentSchema], default: [] },
+    client_message_id: { type: String, trim: true, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
 supportMessageSchema.index({ ticket_id: 1, created_at: 1 });
+supportMessageSchema.index(
+  { ticket_id: 1, client_message_id: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { client_message_id: { $type: 'string' } },
+  },
+);
 
 supportMessageSchema.plugin(toJSON);
 supportMessageSchema.plugin(paginate);

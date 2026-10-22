@@ -4,7 +4,6 @@ import { catchAsync } from '../utils/catchAsync.js';
 import { pick } from '../utils/pick.js';
 import * as supportService from '../services/support.service.js';
 import {
-  saveAttachments,
   resolveAttachmentPath,
   attachmentExists,
 } from '../services/support-storage.service.js';
@@ -17,11 +16,10 @@ import type {
 const files = (req: Request) => (req.files as Express.Multer.File[]) ?? [];
 
 export const createTicket = catchAsync(async (req: Request, res: Response) => {
-  const attachments = await saveAttachments(files(req));
   const result = await supportService.createTicket(
     req.user,
     req.body as CreateTicketBody,
-    attachments,
+    files(req),
   );
   res.status(result.status).json(result);
 });
@@ -50,12 +48,24 @@ export const getTicket = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const addMessage = catchAsync(async (req: Request, res: Response) => {
-  const attachments = await saveAttachments(files(req));
   const result = await supportService.addMessage(
     req.user,
     String(req.params.ticketId),
     req.body as ReplyBody,
-    attachments,
+    files(req),
+  );
+  res.status(result.status).json(result);
+});
+
+export const listMessages = catchAsync(async (req: Request, res: Response) => {
+  const result = await supportService.listMessages(
+    req.user,
+    String(req.params.ticketId),
+    {
+      before: req.query.before ? String(req.query.before) : undefined,
+      after: req.query.after ? String(req.query.after) : undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+    },
   );
   res.status(result.status).json(result);
 });
@@ -112,7 +122,10 @@ export const updateTicket = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const getSummary = catchAsync(async (req: Request, res: Response) => {
-  const result = await supportService.getSummary(req.user);
+  const result = await supportService.getSummary(
+    req.user,
+    req.query.organization_id ? String(req.query.organization_id) : undefined,
+  );
   res.status(result.status).json(result);
 });
 
