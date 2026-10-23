@@ -74,6 +74,7 @@ export const createTicket = {
           }),
       )
       .optional(),
+    client_message_id: Joi.string().trim().min(1).max(100).optional(),
   }),
 };
 
@@ -101,6 +102,10 @@ export const listTickets = {
 };
 
 export const getTicket = {
+  ...ticketIdParams,
+};
+
+export const markTicketAsRead = {
   ...ticketIdParams,
 };
 

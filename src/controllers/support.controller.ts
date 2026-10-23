@@ -133,3 +133,13 @@ export const listStaff = catchAsync(async (_req: Request, res: Response) => {
   const result = await supportService.listStaff();
   res.status(result.status).json(result);
 });
+
+export const markTicketAsRead = catchAsync(
+  async (req: Request, res: Response) => {
+    const result = await supportService.markTicketAsRead(
+      req.user,
+      String(req.params.ticketId),
+    );
+    res.status(result.status).json(result);
+  },
+);

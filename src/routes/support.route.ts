@@ -70,6 +70,13 @@ router.post(
   supportController.addMessage,
 );
 
+router.post(
+  '/tickets/:ticketId/read',
+  auth('viewSupport'),
+  validate(supportValidation.markTicketAsRead),
+  supportController.markTicketAsRead,
+);
+
 router.patch(
   '/tickets/:ticketId/close',
   auth('viewSupport'),
