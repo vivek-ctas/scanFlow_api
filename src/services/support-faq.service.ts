@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import mongoose from 'mongoose';
 import { Faq } from '../models/index.js';
 import { computeStatus, createResponse } from './common.service.js';
+import { systemLog } from '../utils/system-log.js';
 
 const toObjectId = (value: string) => new mongoose.Types.ObjectId(value);
 
@@ -80,6 +81,12 @@ export const createFaq = async (user: any, body: any) => {
     sort_order: Number(body.sort_order) || 0,
     created_by: toObjectId(user.id || user._id),
   });
+  await systemLog({
+    operation: 'CREATE',
+    key: 'create-faq',
+    data: faq.toObject(),
+    actorId: user.id || user._id,
+  });
   return createResponse(httpStatus.CREATED, 'FAQ created successfully.', {
     faq,
   });
@@ -93,6 +100,7 @@ export const updateFaq = async (user: any, faqId: string, body: any) => {
   if (!faq || faq.status === 2) {
     return createResponse(httpStatus.NOT_FOUND, 'FAQ not found');
   }
+  const existing = faq.toObject();
   if (body.question !== undefined) faq.question = body.question;
   if (body.answer !== undefined) faq.answer = body.answer;
   if (body.category !== undefined) faq.category = body.category;
@@ -105,6 +113,13 @@ export const updateFaq = async (user: any, faqId: string, body: any) => {
     faq.status = Number(body.status);
   (faq as any).modified_by = toObjectId(user.id || user._id);
   await faq.save();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-faq',
+    data: faq.toObject(),
+    existingData: existing,
+    actorId: user.id || user._id,
+  });
   return createResponse(httpStatus.OK, 'FAQ updated successfully.', { faq });
 };
 
@@ -116,9 +131,17 @@ export const updateFaqStatus = async (user: any, faqId: string, body: any) => {
   if (!faq || faq.status === 2) {
     return createResponse(httpStatus.NOT_FOUND, 'FAQ not found');
   }
+  const existing = faq.toObject();
   (faq as any).status = computeStatus(body, (faq as any).status);
   (faq as any).modified_by = toObjectId(user.id || user._id);
   await faq.save();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-faq-status',
+    data: faq.toObject(),
+    existingData: existing,
+    actorId: user.id || user._id,
+  });
   return createResponse(httpStatus.OK, 'FAQ status updated successfully.', {
     faq,
   });
@@ -132,8 +155,15 @@ export const deleteFaq = async (user: any, faqId: string) => {
   if (!faq || faq.status === 2) {
     return createResponse(httpStatus.NOT_FOUND, 'FAQ not found');
   }
+  const existing = faq.toObject();
   faq.status = 2;
   (faq as any).modified_by = toObjectId(user.id || user._id);
   await faq.save();
+  await systemLog({
+    operation: 'DELETE',
+    key: 'delete-faq',
+    data: existing,
+    actorId: user.id || user._id,
+  });
   return createResponse(httpStatus.OK, 'FAQ deleted successfully.');
 };

@@ -2,6 +2,7 @@ export { User } from './user.model.js';
 export { UserSession } from './user-session.model.js';
 export { Token } from './token.model.js';
 export { SystemError } from './system-error.model.js';
+export { SystemLog } from './system-log.model.js';
 export { Organization } from './organization.model.js';
 export { Plan } from './plan.model.js';
 export { Subscription } from './subscription.model.js';

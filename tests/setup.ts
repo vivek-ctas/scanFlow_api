@@ -7,6 +7,10 @@ import {
   ensureSupportIndexes,
 } from './helpers.js';
 import { getRedis } from '../src/queues/redis.js';
+import { SystemLog } from '../src/models/index.js';
+import { setSystemLogModel } from '../src/utils/system-log.js';
+
+setSystemLogModel(SystemLog);
 
 beforeAll(async () => {
   await connectDb();

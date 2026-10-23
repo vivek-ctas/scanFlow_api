@@ -3,6 +3,7 @@ import { User } from '../../models/user.model.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { createResponse } from '../common.service.js';
 import { resolveCountryName } from '../country-resolver.service.js';
+import { systemLog } from '../../utils/system-log.js';
 
 /**
  * Fields a user may edit on their own profile. Email, role, status and
@@ -25,6 +26,7 @@ export const updateOwnProfile = async (
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
   }
+  const existing = user.toObject();
 
   PROFILE_UPDATE_KEYS.forEach((key) => {
     if (updateBody[key] === undefined) return;
@@ -48,6 +50,15 @@ export const updateOwnProfile = async (
 
   user.modified_by = userId as any;
   await user.save();
+
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-profile',
+    data: user.toObject(),
+    existingData: existing,
+    actorId: userId,
+    organizationId: user.organization_id,
+  });
 
   return createResponse(httpStatus.OK, 'Profile updated successfully.', {
     user,

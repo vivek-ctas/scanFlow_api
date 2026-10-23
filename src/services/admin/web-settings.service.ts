@@ -1,6 +1,7 @@
 import httpStatus from 'http-status';
 import { WebSettings } from '../../models/web-settings.model.js';
 import { createResponse } from '../common.service.js';
+import { systemLog } from '../../utils/system-log.js';
 import type {
   ICompanyInfo,
   IContactInfo,
@@ -89,5 +90,13 @@ export const updateWebSettings = async (payload: Partial<WebSettingsShape>) => {
     { $set: merged },
     { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true },
   );
+  if (doc) {
+    await systemLog({
+      operation: existing ? 'UPDATE' : 'CREATE',
+      key: existing ? 'update-web-settings' : 'create-web-settings',
+      data: doc.toObject(),
+      existingData: existing ?? undefined,
+    });
+  }
   return createResponse(httpStatus.OK, 'Web settings saved successfully.', doc);
 };

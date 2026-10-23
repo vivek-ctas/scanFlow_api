@@ -2,13 +2,15 @@ import mongoose from 'mongoose';
 import config from './config/config.js';
 import { logger } from './config/logger.js';
 import { setSystemErrorModel } from './utils/system-error.handler.js';
-import { SystemError, Usage } from './models/index.js';
+import { SystemError, SystemLog, Usage } from './models/index.js';
+import { setSystemLogModel } from './utils/system-log.js';
 import {
   startWebhookWorker,
   sweepWebhookBatches,
 } from './queues/webhook.worker.js';
 import { startSupportWorker } from './queues/support.worker.js';
 import { runAutoCloseJob } from './services/support.service.js';
+import { withCronRun } from './cron/cron-runner.js';
 import { reconcileScanUsage } from './services/quota.service.js';
 import { normalizeAllQueuePriorities } from './services/subscription.service.js';
 import { getRedis, isRedisConfigured } from './queues/redis.js';
@@ -71,7 +73,9 @@ const everyHour = async () => {
 
 const autoCloseSupport = async () => {
   try {
-    const closed = await runAutoCloseJob();
+    const closed = await withCronRun('support-auto-close', () =>
+      runAutoCloseJob(),
+    );
     if (closed) {
       logger.info(`[SUPPORT] auto-closed ${closed} resolved ticket(s)`);
     }
@@ -82,6 +86,7 @@ const autoCloseSupport = async () => {
 
 const start = async () => {
   setSystemErrorModel(SystemError);
+  setSystemLogModel(SystemLog);
   mongoose.set('strictQuery', false);
   await mongoose.connect(config.mongoose.url, config.mongoose.options);
   logger.info('Worker connected to MongoDB');

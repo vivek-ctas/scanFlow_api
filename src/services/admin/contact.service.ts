@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import { Contact } from '../../models/contact.model.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { createResponse, escapeRegExp, toObjectId } from '../common.service.js';
+import { systemLog } from '../../utils/system-log.js';
 import {
   sendContactConfirmationEmail,
   sendContactNotificationEmail,
@@ -126,6 +127,14 @@ export const updateContactStatus = async (
     { status },
     { new: true },
   );
+  if (contact) {
+    await systemLog({
+      operation: 'UPDATE',
+      key: 'update-contact-status',
+      data: contact.toObject(),
+      existingData: existing.toObject(),
+    });
+  }
   return createResponse(httpStatus.OK, 'Status updated successfully', contact);
 };
 
@@ -161,6 +170,15 @@ export const replyToContact = async (
     name: contact.name,
     message,
   }).catch(() => null);
+
+  if (updated) {
+    await systemLog({
+      operation: 'UPDATE',
+      key: 'reply-contact',
+      data: updated.toObject(),
+      existingData: contact.toObject(),
+    });
+  }
 
   return createResponse(httpStatus.OK, 'Reply sent successfully', updated);
 };

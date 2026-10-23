@@ -6,6 +6,7 @@ import { ApiError } from '../../utils/ApiError.js';
 import { createResponse } from '../common.service.js';
 import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
 import { enqueueScanWebhook } from '../../queues/webhook.queue.js';
+import { systemLog } from '../../utils/system-log.js';
 
 export const getWebhookConfig = async (
   organizationId: string,
@@ -42,13 +43,29 @@ export const upsertWebhookConfig = async (
 
   let config;
   if (existing) {
+    const previous = existing.toObject();
     Object.assign(existing, payload);
     await existing.save();
     config = existing;
+    await systemLog({
+      operation: 'UPDATE',
+      key: 'update-webhook-config',
+      data: config.toObject(),
+      existingData: previous,
+      actorId: reqUser._id,
+      organizationId: orgScope,
+    });
   } else {
     config = await WebhookConfig.create({
       organization_id: orgScope,
       ...payload,
+    });
+    await systemLog({
+      operation: 'CREATE',
+      key: 'create-webhook-config',
+      data: config.toObject(),
+      actorId: reqUser._id,
+      organizationId: orgScope,
     });
   }
 
@@ -68,7 +85,15 @@ export const deleteWebhookConfig = async (
   if (!config) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Webhook config not found');
   }
+  const removed = config.toObject();
   await config.deleteOne();
+  await systemLog({
+    operation: 'DELETE',
+    key: 'delete-webhook-config',
+    data: removed,
+    actorId: reqUser._id,
+    organizationId: orgScope,
+  });
   return createResponse(httpStatus.OK, 'Webhook config deleted successfully.');
 };
 

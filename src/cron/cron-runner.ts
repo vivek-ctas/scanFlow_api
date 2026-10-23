@@ -1,5 +1,6 @@
 import { logger } from '../config/logger.js';
 import { errorHandler } from '../utils/system-error.handler.js';
+import { systemLog } from '../utils/system-log.js';
 
 const running = new Set<string>();
 
@@ -25,7 +26,14 @@ export const withCronRun = async <T>(
   logger.info(`[CRON] ${title} starting`);
   try {
     const result = await fn();
-    logger.info(`[CRON] ${title} completed in ${Date.now() - started}ms`);
+    const durationMs = Date.now() - started;
+    logger.info(`[CRON] ${title} completed in ${durationMs}ms`);
+    await systemLog({
+      operation: 'CRON',
+      key: `cron:${title}`,
+      data: { status: 'completed', duration_ms: durationMs },
+      actorRole: 'SYSTEM',
+    });
     return result;
   } catch (err) {
     logger.error(
@@ -34,6 +42,16 @@ export const withCronRun = async <T>(
     await errorHandler.errorM({
       action_type: `cron-${title}`,
       error_data: err,
+    });
+    await systemLog({
+      operation: 'CRON',
+      key: `cron:${title}`,
+      data: {
+        status: 'failed',
+        duration_ms: Date.now() - started,
+        error: (err as Error).message,
+      },
+      actorRole: 'SYSTEM',
     });
     return undefined;
   } finally {
