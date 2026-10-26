@@ -13,6 +13,7 @@ import { jwtStrategy } from './config/passport.js';
 import { authLimiter, operatorPinLimiter } from './middlewares/rateLimiter.js';
 import { mongoSanitize } from './middlewares/mongoSanitize.js';
 import { auth } from './middlewares/auth.js';
+import { requestContext } from './middlewares/request-context.js';
 import { apiRouter, PUBLIC_PATHS } from './routes/index.js';
 import {
   errorConverter,
@@ -78,6 +79,7 @@ app.use('/api', (req, res, next) => {
   return auth()(req, res, next);
 });
 
+app.use('/api', requestContext);
 app.use('/api', apiRouter);
 
 app.get('/', (req, res) => {

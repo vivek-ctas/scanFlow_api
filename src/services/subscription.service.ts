@@ -35,6 +35,7 @@ import {
   dispatchSubscriptionGrantEmails,
 } from './subscription-email.service.js';
 import { invalidateDashboardCache } from './admin/dashboard.cache.js';
+import { systemLog } from '../utils/system-log.js';
 
 const activeSubQuery = (organizationId: string) => ({
   organization_id: toObjectId(organizationId),
@@ -330,6 +331,12 @@ export const grantSubscription = async (
     await writeActiveSubCache(sub, true);
   }
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'CREATE',
+    key: 'grant-subscription',
+    data: sub.toObject(),
+    organizationId: sub.organization_id,
+  });
   return sub;
 };
 
@@ -344,6 +351,7 @@ export const promoteEarliestFutureSubscription = async (
   if (!earliest) {
     return null;
   }
+  const existing = earliest.toObject();
   earliest.status = 'active';
   earliest.queue_priority = 0;
   await earliest.save();
@@ -352,6 +360,13 @@ export const promoteEarliestFutureSubscription = async (
   await normalizeQueuePriorities(organizationId);
   void dispatchSubscriptionActivatedEmail(organizationId, earliest);
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'promote-subscription',
+    data: earliest.toObject(),
+    existingData: existing,
+    organizationId,
+  });
   return earliest;
 };
 
@@ -393,12 +408,20 @@ export const cancelQueuedSubscription = async (
       'ONLY_FUTURE_SUBSCRIPTIONS_CAN_BE_CANCELLED',
     );
   }
+  const existing = sub.toObject();
   sub.status = 'cancelled';
   sub.cancellation_reason = 'Cancelled from queue';
   sub.queue_priority = 0;
   await sub.save();
   await normalizeQueuePriorities(organizationId);
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'cancel-queued-subscription',
+    data: sub.toObject(),
+    existingData: existing,
+    organizationId,
+  });
   return createResponse(httpStatus.OK, 'Queued subscription cancelled.', {
     cancelledSubscription: sub._id,
     futureQueue: await getOrganizationSubscriptionQueue(organizationId),
@@ -478,6 +501,13 @@ export const reorderSubscriptionQueue = async (
 
   void invalidateDashboardCache();
 
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'reorder-subscription-queue',
+    data: { orderedSubscriptionIds },
+    organizationId,
+  });
+
   return createResponse(httpStatus.OK, 'Future queue reordered successfully.', {
     futureQueue: await getOrganizationSubscriptionQueue(organizationId),
   });
@@ -546,6 +576,12 @@ export const adjustScanLimits = async (
       { arrayFilters: [{ 'feat.features_name': 'scan' }] },
     );
     void invalidateDashboardCache();
+    await systemLog({
+      operation: 'UPDATE',
+      key: 'adjust-scan-limits',
+      data: { scan_limit: newLimit, adjustment: totalDelta },
+      organizationId,
+    });
     return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
       subscription_id: sub._id,
       scan_limit: newLimit,
@@ -583,6 +619,12 @@ export const adjustScanLimits = async (
     );
   }
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'adjust-scan-limits',
+    data: { scan_limit: newLimit, adjustment: totalDelta, usage: used },
+    organizationId,
+  });
   return createResponse(httpStatus.OK, 'Scan limit adjusted.', {
     subscription_id: sub._id,
     scan_limit: newLimit,
@@ -646,6 +688,7 @@ export const renewSubscription = async (
   if (!active) {
     throw new ApiError(httpStatus.NOT_FOUND, 'NO_ACTIVE_SUBSCRIPTION');
   }
+  const activeBefore = active.toObject();
 
   if (mode === 'continue') {
     const newExpiry = computeExpiresAt(
@@ -698,6 +741,13 @@ export const renewSubscription = async (
     }
     await normalizeQueuePriorities(organizationId);
     void invalidateDashboardCache();
+    await systemLog({
+      operation: 'UPDATE',
+      key: 'renew-subscription',
+      data: active.toObject(),
+      existingData: activeBefore,
+      organizationId,
+    });
     return createResponse(httpStatus.OK, 'Subscription renewed.', {
       activeSubscription: await getActiveSubscription(organizationId),
       futureQueue: await getOrganizationSubscriptionQueue(organizationId),
@@ -745,6 +795,13 @@ export const renewSubscription = async (
   active.status = 'cancelled';
   active.cancellation_reason = 'recreate';
   await active.save();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'renew-subscription',
+    data: active.toObject(),
+    existingData: activeBefore,
+    organizationId,
+  });
   await flushActiveSubUsage(organizationId);
   await deleteActiveSubCache(organizationId);
   const created = await grantSubscription(
@@ -771,6 +828,7 @@ export const cancelActiveSubscription = async (
   if (!active) {
     throw new ApiError(httpStatus.NOT_FOUND, 'NO_ACTIVE_SUBSCRIPTION');
   }
+  const existing = active.toObject();
   await flushActiveSubUsage(organizationId);
   active.status = 'cancelled';
   active.cancellation_reason = reason || 'Cancelled';
@@ -779,6 +837,13 @@ export const cancelActiveSubscription = async (
   const promoted = await promoteEarliestFutureSubscription(organizationId);
   await normalizeQueuePriorities(organizationId);
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'cancel-active-subscription',
+    data: active.toObject(),
+    existingData: existing,
+    organizationId,
+  });
   return createResponse(httpStatus.OK, 'Active subscription cancelled.', {
     cancelledSubscription: active._id,
     promotedSubscription: promoted?._id ?? null,
@@ -796,12 +861,20 @@ export const forceActivateSubscription = async (
 ) => {
   const existingActive = await getActiveSubscription(organizationId);
   if (existingActive) {
+    const existing = existingActive.toObject();
     await flushActiveSubUsage(organizationId);
     await Usage.deleteMany({ subscription_id: existingActive._id });
     existingActive.status = 'cancelled';
     existingActive.cancellation_reason = 'Force activated';
     await existingActive.save();
     await deleteActiveSubCache(organizationId);
+    await systemLog({
+      operation: 'UPDATE',
+      key: 'force-activate-subscription',
+      data: existingActive.toObject(),
+      existingData: existing,
+      organizationId,
+    });
   }
   const created = await grantSubscription(organizationId, planId, {
     trialDays: options.trialDays ?? 0,

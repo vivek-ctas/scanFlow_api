@@ -28,6 +28,7 @@ import type {
 } from '../models/support-message.model.js';
 import { getOrgQuota, getOrgSummary } from './user/org-dashboard.service.js';
 import { scrubErrorSummary } from '../utils/dashboard-scrub.js';
+import { systemLog } from '../utils/system-log.js';
 import { enqueueSupportNotification } from '../queues/support.queue.js';
 import {
   saveAttachments,
@@ -400,6 +401,7 @@ const serializeTicket = (
 
   // Compute unread_count
   if (messages) {
+    out.messages = messages.map((m) => serializeMessage(m, staff));
     const lastReadAt = ticket.last_read_at?.get?.(currentUserId)
       ? new Date(ticket.last_read_at.get(currentUserId))
       : null;
@@ -696,6 +698,13 @@ export const createTicket = async (
   const firstMessage = await SupportMessage.findOne({ ticket_id: ticket._id })
     .sort({ created_at: 1 })
     .lean();
+  await systemLog({
+    operation: 'CREATE',
+    key: 'create-support-ticket',
+    data: ticket.toObject(),
+    actorId: reqUser._id,
+    organizationId: ticket.organization_id,
+  });
   return createResponse(
     httpStatus.CREATED,
     'Support ticket created successfully.',
@@ -1084,6 +1093,14 @@ export const addMessage = async (
     staff,
     String(reqUser._id),
   );
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'reply-support-ticket',
+    data: (updated ?? ticket).toObject(),
+    existingData: ticket.toObject(),
+    actorId: reqUser._id,
+    organizationId: ticket.organization_id,
+  });
   return createResponse(httpStatus.OK, 'Reply added successfully.', {
     ticket: serializeTicket(updated ?? ticket, relations),
     message: serializeMessage(message, staff),
@@ -1128,6 +1145,14 @@ export const closeTicket = async (reqUser: any, ticketId: string) => {
     isStaff(reqUser),
     String(reqUser._id),
   );
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'close-support-ticket',
+    data: (updated ?? ticket).toObject(),
+    existingData: ticket.toObject(),
+    actorId: reqUser._id,
+    organizationId: ticket.organization_id,
+  });
   return createResponse(httpStatus.OK, 'Ticket closed successfully.', {
     ticket: serializeTicket(updated ?? ticket, updatedRelations),
   });
@@ -1168,6 +1193,14 @@ export const addNote = async (
     true,
     String(reqUser._id),
   );
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'add-support-note',
+    data: (updated ?? ticket).toObject(),
+    existingData: ticket.toObject(),
+    actorId: reqUser._id,
+    organizationId: ticket.organization_id,
+  });
   return createResponse(httpStatus.OK, 'Internal note added successfully.', {
     ticket: serializeTicket(updated ?? ticket, relations),
     message: noteMessage ? serializeMessage(noteMessage, true) : null,
@@ -1281,6 +1314,14 @@ export const updateTicket = async (
     true,
     String(reqUser._id),
   );
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-support-ticket',
+    data: (updated ?? ticket).toObject(),
+    existingData: ticket.toObject(),
+    actorId: reqUser._id,
+    organizationId: ticket.organization_id,
+  });
   return createResponse(httpStatus.OK, 'Ticket updated successfully.', {
     ticket: serializeTicket(updated ?? ticket, relations),
   });

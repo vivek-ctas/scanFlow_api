@@ -10,6 +10,7 @@ import { logger } from '../config/logger.js';
 import { createResponse, normalizeEmail } from './common.service.js';
 import * as tokenService from './token.service.js';
 import * as emailService from './email.service.js';
+import { systemLog } from '../utils/system-log.js';
 
 const OTP_EXPIRY_MINUTES = 5;
 const PIN_MAX_ATTEMPTS = 5;
@@ -128,6 +129,15 @@ export const verifyOtpAndLogin = async (email: string, otp: string) => {
 
   const tokens = await tokenService.generateAuthTokens(user);
 
+  await systemLog({
+    operation: 'LOGIN',
+    key: 'login',
+    data: { email: user.email, method: 'otp' },
+    actorId: user._id,
+    actorRole: user.role,
+    organizationId: user.organization_id,
+  });
+
   return createResponse(
     httpStatus.OK,
     'OTP verified and user logged in successfully.',
@@ -179,6 +189,14 @@ export const loginWithPin = async (operatorId: string, pin: string) => {
       { $set: { pin_attempt_count: 0, pin_locked_until: null } },
     );
     const tokens = await tokenService.generateAuthTokens(user);
+    await systemLog({
+      operation: 'LOGIN',
+      key: 'login',
+      data: { operator_id: user.operator_id, method: 'pin' },
+      actorId: user._id,
+      actorRole: user.role,
+      organizationId: user.organization_id,
+    });
     return createResponse(httpStatus.OK, 'Operator logged in successfully.', {
       tokens,
       user,
@@ -238,7 +256,19 @@ export const logout = async (refreshToken: string) => {
   if (!refreshTokenDoc) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Not found');
   }
+  const user = await User.findById(refreshTokenDoc.user).select(
+    'role organization_id',
+  );
   await refreshTokenDoc.deleteOne();
+
+  await systemLog({
+    operation: 'LOGOUT',
+    key: 'logout',
+    data: { method: 'refresh_token' },
+    actorId: refreshTokenDoc.user,
+    actorRole: user?.role ?? null,
+    organizationId: user?.organization_id ?? null,
+  });
 
   return createResponse(httpStatus.OK, 'Logged out successfully.');
 };

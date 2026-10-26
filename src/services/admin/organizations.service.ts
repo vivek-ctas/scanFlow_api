@@ -19,6 +19,7 @@ import { grantSubscription } from '../subscription.service.js';
 import { dispatchSubscriptionGrantEmails } from '../subscription-email.service.js';
 import { resolveCountryName } from '../country-resolver.service.js';
 import { invalidateDashboardCache } from './dashboard.cache.js';
+import { systemLog } from '../../utils/system-log.js';
 
 export const createOrganization = async (
   orgBody: Record<string, any>,
@@ -108,6 +109,14 @@ export const createOrganization = async (
   }
 
   void invalidateDashboardCache();
+
+  await systemLog({
+    operation: 'CREATE',
+    key: 'create-organization',
+    data: { organization: org.toObject(), admin: admin.toObject() },
+    actorId: createdBy,
+    organizationId: org._id,
+  });
 
   return createResponse(
     httpStatus.CREATED,
@@ -242,6 +251,7 @@ export const updateOrganizationById = async (
   modifiedBy?: string,
 ) => {
   const org = await getOrganizationById(organizationId);
+  const existing = org.toObject();
   const normalized = { ...updateBody };
   if (normalized.company_name === undefined && normalized.name !== undefined) {
     normalized.company_name = normalized.name;
@@ -298,6 +308,14 @@ export const updateOrganizationById = async (
 
   void invalidateDashboardCache();
 
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-organization',
+    data: org.toObject(),
+    existingData: existing,
+    organizationId: org._id,
+  });
+
   return org;
 };
 
@@ -307,10 +325,19 @@ export const updateOrganizationStatusById = async (
   modifiedBy?: string,
 ) => {
   const org = await getOrganizationById(organizationId);
+  const existing = org.toObject();
   org.status = computeStatus(body, org.status);
   org.modified_by = modifiedBy ? toObjectId(modifiedBy) : null;
   await org.save();
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-organization-status',
+    data: org.toObject(),
+    existingData: existing,
+    actorId: modifiedBy,
+    organizationId: org._id,
+  });
   return org;
 };
 
@@ -319,9 +346,17 @@ export const deleteOrganizationById = async (
   actorId?: string,
 ) => {
   const org = await getOrganizationById(organizationId);
+  const existing = org.toObject();
   org.status = 2;
   org.modified_by = actorId ? toObjectId(actorId) : null;
   await org.save();
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'DELETE',
+    key: 'delete-organization',
+    data: existing,
+    actorId,
+    organizationId: org._id,
+  });
   return org;
 };

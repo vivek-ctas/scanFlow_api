@@ -2,10 +2,12 @@ import mongoose from 'mongoose';
 import app from './app.js';
 import config from './config/config.js';
 import { logger } from './config/logger.js';
-import { SystemError } from './models/index.js';
+import { SystemError, SystemLog } from './models/index.js';
 import { setSystemErrorModel } from './utils/system-error.handler.js';
+import { setSystemLogModel } from './utils/system-log.js';
 
 setSystemErrorModel(SystemError);
+setSystemLogModel(SystemLog);
 
 let server: ReturnType<typeof app.listen> | null = null;
 

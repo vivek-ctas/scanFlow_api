@@ -13,6 +13,7 @@ import { ORGANIZATION_ASSIGNABLE_ROLES } from '../../config/roles.js';
 import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
 import { buildOperatorId } from '../../utils/operator-id.util.js';
 import { invalidateDashboardCache } from '../admin/dashboard.cache.js';
+import { systemLog } from '../../utils/system-log.js';
 
 const OPERATOR_ROLES = ORGANIZATION_ASSIGNABLE_ROLES;
 const PIN_PATTERN = /^\d{6}$/;
@@ -110,6 +111,13 @@ export const createOperator = async (
         pin_hash: pinHash,
       });
       void invalidateDashboardCache();
+      await systemLog({
+        operation: 'CREATE',
+        key: 'create-operator',
+        data: user.toObject(),
+        actorId: reqUser._id,
+        organizationId: organizationId,
+      });
       return createResponse(
         httpStatus.CREATED,
         'Operator created successfully.',
@@ -207,6 +215,7 @@ export const updateOperatorById = async (
   reqUser: any,
 ) => {
   const user = await getOperatorById(operatorId, reqUser);
+  const existing = user.toObject();
 
   const nextRole = updateBody.role ?? user.role;
   if (!OPERATOR_ROLES.includes(nextRole)) {
@@ -271,6 +280,14 @@ export const updateOperatorById = async (
   user.modified_by = reqUser._id;
   await user.save();
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-operator',
+    data: user.toObject(),
+    existingData: existing,
+    actorId: reqUser._id,
+    organizationId: user.organization_id,
+  });
   return user;
 };
 
@@ -286,10 +303,19 @@ export const updateOperatorRoleById = async (
     );
   }
   const user = await getOperatorById(operatorId, reqUser);
+  const existing = user.toObject();
   user.role = role;
   user.modified_by = reqUser._id;
   await user.save();
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-operator-role',
+    data: user.toObject(),
+    existingData: existing,
+    actorId: reqUser._id,
+    organizationId: user.organization_id,
+  });
   return user;
 };
 
@@ -299,10 +325,19 @@ export const updateOperatorStatusById = async (
   reqUser: any,
 ) => {
   const user = await getOperatorById(operatorId, reqUser);
+  const existing = user.toObject();
   user.status = computeStatus(body, user.status);
   user.modified_by = reqUser._id;
   await user.save();
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-operator-status',
+    data: user.toObject(),
+    existingData: existing,
+    actorId: reqUser._id,
+    organizationId: user.organization_id,
+  });
   return user;
 };
 
@@ -314,9 +349,17 @@ export const deleteOperatorById = async (operatorId: string, reqUser: any) => {
       'You cannot delete your own account',
     );
   }
+  const existing = user.toObject();
   user.status = 2;
   user.modified_by = reqUser._id;
   await user.save();
   void invalidateDashboardCache();
+  await systemLog({
+    operation: 'DELETE',
+    key: 'delete-operator',
+    data: existing,
+    actorId: reqUser._id,
+    organizationId: user.organization_id,
+  });
   return user;
 };

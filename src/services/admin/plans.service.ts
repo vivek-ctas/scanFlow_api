@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import { Plan } from '../../models/plan.model.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { computeQuarterlyPrice } from '../../utils/plan-features.util.js';
+import { systemLog } from '../../utils/system-log.js';
 import {
   computeStatus,
   createResponse,
@@ -49,6 +50,11 @@ export const createPlan = async (planBody: Record<string, any>) => {
       planBody.price_quarterly,
     ),
     status: planBody.status ?? 1,
+  });
+  await systemLog({
+    operation: 'CREATE',
+    key: 'create-plan',
+    data: plan.toObject(),
   });
   return createResponse(httpStatus.CREATED, 'Plan created successfully.', {
     plan,
@@ -142,6 +148,7 @@ export const updatePlanById = async (
   updateBody: Record<string, any>,
 ) => {
   const plan = await getPlanById(planId);
+  const existing = plan.toObject();
   if (updateBody.name && (await planNameTaken(updateBody.name, planId))) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Plan name already exists');
   }
@@ -167,6 +174,12 @@ export const updatePlanById = async (
   }
 
   await plan.save();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-plan',
+    data: plan.toObject(),
+    existingData: existing,
+  });
   return plan;
 };
 
@@ -175,14 +188,27 @@ export const updatePlanStatusById = async (
   body: { status?: number; action_type?: string },
 ) => {
   const plan = await getPlanById(planId);
+  const existing = plan.toObject();
   (plan as any).status = computeStatus(body, plan.status);
   await plan.save();
+  await systemLog({
+    operation: 'UPDATE',
+    key: 'update-plan-status',
+    data: plan.toObject(),
+    existingData: existing,
+  });
   return plan;
 };
 
 export const deletePlanById = async (planId: string) => {
   const plan = await getPlanById(planId);
+  const existing = plan.toObject();
   (plan as any).status = 2;
   await plan.save();
+  await systemLog({
+    operation: 'DELETE',
+    key: 'delete-plan',
+    data: existing,
+  });
   return plan;
 };
