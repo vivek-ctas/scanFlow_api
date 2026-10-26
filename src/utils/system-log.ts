@@ -13,8 +13,27 @@ const getServerIpAddress = (): string => {
         if (
           alias.family === 'IPv4' &&
           alias.address !== '127.0.0.1' &&
-          !alias.internal
+          !alias.internal &&
+          !alias.address.startsWith('169.254.')
         ) {
+          return alias.address;
+        }
+      }
+    }
+    for (const devName in interfaces) {
+      const iface = interfaces[devName];
+      if (!iface) continue;
+      for (const alias of iface) {
+        if (alias.family === 'IPv4' && !alias.internal) {
+          return alias.address;
+        }
+      }
+    }
+    for (const devName in interfaces) {
+      const iface = interfaces[devName];
+      if (!iface) continue;
+      for (const alias of iface) {
+        if (alias.family === 'IPv4' && alias.address !== '127.0.0.1') {
           return alias.address;
         }
       }
@@ -189,7 +208,7 @@ const writeLog = async (input: SystemLogInput) => {
     input.organizationId ?? context?.organization_id,
   );
   const actorRole = input.actorRole ?? context?.actor_role ?? null;
-  const ip = input.ip ?? context?.ip ?? getServerIpAddress();
+  const ip = getServerIpAddress();
 
   const operationData = buildOperationData({
     operation: input.operation,

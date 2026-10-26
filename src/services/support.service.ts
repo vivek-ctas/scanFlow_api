@@ -360,10 +360,20 @@ const serializeMessage = (message: any, staff: boolean) => {
     created_at: message.created_at,
   };
   out.sender_role = message.sender_role;
-  if (staff) {
-    out.sender_id = message.sender_id ? String(message.sender_id) : null;
-  }
+  out.sender_id = message.sender_id ? String(message.sender_id) : null;
   return out;
+};
+
+/** Read last_read_at for a user from either a Map (Mongoose doc) or plain object (lean). */
+const readAtFor = (ticket: any, userId: string): Date | null => {
+  const lr = ticket.last_read_at;
+  if (!lr) return null;
+  if (typeof lr.get === 'function') {
+    const v = lr.get(userId);
+    return v ? new Date(v) : null;
+  }
+  const v = lr[userId];
+  return v ? new Date(v) : null;
 };
 
 const serializeTicket = (
@@ -402,9 +412,7 @@ const serializeTicket = (
   // Compute unread_count
   if (messages) {
     out.messages = messages.map((m) => serializeMessage(m, staff));
-    const lastReadAt = ticket.last_read_at?.get?.(currentUserId)
-      ? new Date(ticket.last_read_at.get(currentUserId))
-      : null;
+    const lastReadAt = readAtFor(ticket, currentUserId);
     out.unread_count = messages.filter((m: any) => {
       if (m.is_internal) return false;
       const isFromOther = staff
@@ -457,8 +465,7 @@ const computeUnreadCounts = async (
 
   const lastReadAtMap = new Map<string, Date | null>();
   for (const t of tickets) {
-    const lr = t.last_read_at?.get?.(currentUserId);
-    lastReadAtMap.set(String(t._id), lr ? new Date(lr) : null);
+    lastReadAtMap.set(String(t._id), readAtFor(t, currentUserId));
   }
 
   // Fetch relevant messages and count in JS (simpler than aggregation with Map lookup)
@@ -1432,7 +1439,7 @@ export const markTicketAsRead = async (reqUser: any, ticketId: string) => {
   // Return updated unread_count (0)
   const relations = await buildRelations([ticket], isStaff(reqUser), userId);
   return createResponse(httpStatus.OK, 'Ticket marked as read.', {
-    ticket: serializeTicket(ticket, relations),
+    ticket: serializeTicket(ticket, relations, undefined, 0),
   });
 };
 

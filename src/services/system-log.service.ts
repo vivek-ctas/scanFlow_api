@@ -137,13 +137,21 @@ export const listSystemLogs = async (
       .skip((page - 1) * limit)
       .limit(limit)
       .select('-operation_data')
+      .populate('operation_by', 'first_name last_name email role')
       .lean(),
     SystemLog.countDocuments(query),
   ]);
 
   const results = logs.map(({ _id, operation_by, ...rest }) => {
     const item: Record<string, any> = { id: String(_id), ...rest };
-    if (operation_by) {
+    if (operation_by && typeof operation_by === 'object') {
+      const ob: any = operation_by;
+      if (ob._id) {
+        ob.id = String(ob._id);
+        delete ob._id;
+      }
+      item.operation_by = ob;
+    } else if (operation_by) {
       item.operation_by = String(operation_by);
     }
     return item;

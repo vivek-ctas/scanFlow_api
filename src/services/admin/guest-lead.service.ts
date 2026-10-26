@@ -26,7 +26,9 @@ export const listGuestLeads = async (
       query.created_at.$gte = new Date(String(filter.date_from));
     }
     if (filter.date_to !== undefined) {
-      query.created_at.$lte = new Date(String(filter.date_to));
+      const end = new Date(String(filter.date_to));
+      if (!Number.isNaN(end.getTime())) end.setHours(23, 59, 59, 999);
+      query.created_at.$lte = end;
     }
   }
   if (filter.search) {
