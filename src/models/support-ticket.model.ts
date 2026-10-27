@@ -73,6 +73,9 @@ export interface ISupportTicket extends Document {
   client_info?: Record<string, any> | null;
   /** Per-user last read timestamp (Map: userId -> Date). */
   last_read_at?: Map<string, Date>;
+  /** Role-level read cursors */
+  customer_read_at?: Date | null;
+  staff_read_at?: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -159,6 +162,8 @@ const supportTicketSchema = new Schema<ISupportTicket, ISupportTicketModel>(
       of: Date,
       default: {},
     },
+    customer_read_at: { type: Date, default: null },
+    staff_read_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );

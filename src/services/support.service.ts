@@ -46,7 +46,7 @@ const nameOf = (user: any): string | null => {
 };
 
 const toSortBy = (sortBy?: string): string => {
-  if (!sortBy) return 'updated_at:desc';
+  if (!sortBy) return 'last_message_at:desc,updated_at:desc';
   return sortBy
     .split(',')
     .map((option) => option.trim())
@@ -348,7 +348,7 @@ const serializeLastPublicMessage = (ticket: any) => {
   };
 };
 
-const serializeMessage = (message: any, staff: boolean) => {
+const serializeMessage = (message: any, staff: boolean, viewerId?: string) => {
   const out: Record<string, any> = {
     id: String(message._id),
     kind: message.kind,
@@ -361,6 +361,13 @@ const serializeMessage = (message: any, staff: boolean) => {
   };
   out.sender_role = message.sender_role;
   out.sender_id = message.sender_id ? String(message.sender_id) : null;
+  if (viewerId) {
+    if (message.sender_id) {
+      out.is_mine = String(message.sender_id) === String(viewerId);
+    } else {
+      out.is_mine = false;
+    }
+  }
   return out;
 };
 
@@ -378,9 +385,10 @@ const readAtFor = (ticket: any, userId: string): Date | null => {
 
 const serializeTicket = (
   ticket: any,
-  relations: TicketRelations,
-  messages?: any[],
+  relations: any,
+  messages?: ISupportMessage[],
   precomputedUnreadCount?: number,
+  viewerId?: string,
 ) => {
   const { staff, userMap, orgMap, currentUserId } = relations;
   const out: Record<string, any> = {
@@ -411,7 +419,9 @@ const serializeTicket = (
 
   // Compute unread_count
   if (messages) {
-    out.messages = messages.map((m) => serializeMessage(m, staff));
+    out.messages = messages.map((m) =>
+      serializeMessage(m, staff, viewerId || currentUserId),
+    );
     const lastReadAt = readAtFor(ticket, currentUserId);
     out.unread_count = messages.filter((m: any) => {
       if (m.is_internal) return false;
@@ -866,9 +876,21 @@ export const getTicketDetail = async (reqUser: any, ticketId: string) => {
     messageQuery,
   ).sort({ created_at: 1 });
 
-  const relations = await buildRelations([ticket], staff, String(reqUser._id));
+  const viewerId = String(reqUser._id);
+  const relations = await buildRelations([ticket], staff, viewerId);
+  const serialized = serializeTicket(
+    ticket,
+    relations,
+    messages,
+    undefined,
+    viewerId,
+  );
+  (serialized as any).viewer_last_read_at = readAtFor(ticket, viewerId);
+  (serialized as any).other_party_read_at = staff
+    ? ticket.customer_read_at
+    : ticket.staff_read_at;
   return createResponse(httpStatus.OK, 'Support ticket fetched successfully.', {
-    ticket: serializeTicket(ticket, relations, messages),
+    ticket: serialized,
   });
 };
 
@@ -921,15 +943,20 @@ export const listMessages = async (
   // Return in chronological order regardless of the query direction.
   if (!params.after) page.reverse();
 
-  const relations = await buildRelations([ticket], staff, String(reqUser._id));
+  const viewerId = String(reqUser._id);
+  const relations = await buildRelations([ticket], staff, viewerId);
   const ticketState = serializeTicket(ticket, relations);
 
   return createResponse(
     httpStatus.OK,
     'Support messages fetched successfully.',
     {
-      results: page.map((m) => serializeMessage(m, staff)),
+      results: page.map((m) => serializeMessage(m, staff, viewerId)),
       has_more: hasMore,
+      viewer_last_read_at: readAtFor(ticket, viewerId),
+      other_party_read_at: staff
+        ? ticket.customer_read_at
+        : ticket.staff_read_at,
       ticket: {
         status: ticketState.status,
         priority: ticketState.priority,
@@ -953,6 +980,14 @@ export const addMessage = async (
 ) => {
   const staff = isStaff(reqUser);
   const ticket = await loadTicketForWrite(reqUser, ticketId);
+
+  const msg = typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!msg && (!files || files.length === 0)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Write a message or attach a file',
+    );
+  }
 
   // Idempotency: a retried reply carrying the same client_message_id returns
   // the existing message instead of inserting a duplicate (mirrors
@@ -1000,7 +1035,7 @@ export const addMessage = async (
       sender_role: reqUser.role,
       kind: 'reply',
       is_internal: false,
-      body: body.message,
+      body: msg,
       attachments,
       client_message_id: clientMessageId,
     });
@@ -1031,8 +1066,8 @@ export const addMessage = async (
   const updates: Record<string, any> = {
     last_message_at: now,
     last_public_message: {
-      preview: buildPreview(body.message, attachments.length > 0),
-      by_role: reqUser.role,
+      preview: buildPreview(msg, attachments.length > 0),
+      by_role: message.sender_role,
       at: now,
     },
   };
@@ -1171,6 +1206,11 @@ export const addNote = async (
   body: ReplyBody,
 ) => {
   const ticket = await loadTicketForWrite(reqUser, ticketId);
+  const trimmedMessage =
+    typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!trimmedMessage) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Note is required');
+  }
   const now = new Date();
 
   await SupportMessage.create({
@@ -1180,7 +1220,7 @@ export const addNote = async (
     sender_role: reqUser.role,
     kind: 'note',
     is_internal: true,
-    body: body.message,
+    body: trimmedMessage,
   });
   await SupportTicket.findByIdAndUpdate(ticket._id, {
     $set: { last_message_at: now },
@@ -1425,19 +1465,28 @@ export const markTicketAsRead = async (reqUser: any, ticketId: string) => {
 
   const now = new Date();
   const userId = String(reqUser._id);
+  const staff = isStaff(reqUser);
 
-  const ticket = await SupportTicket.findOneAndUpdate(
-    query,
-    {
-      $set: { [`last_read_at.${userId}`]: now },
+  const update: Record<string, any> = {
+    $max: {
+      [`last_read_at.${userId}`]: now,
     },
-    { new: true },
-  );
+  };
+  if (staff) {
+    update.$max.staff_read_at = now;
+  } else {
+    update.$max.customer_read_at = now;
+  }
+
+  const ticket = await SupportTicket.findOneAndUpdate(query, update, {
+    new: true,
+    timestamps: false,
+  });
 
   if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Ticket not found');
 
   // Return updated unread_count (0)
-  const relations = await buildRelations([ticket], isStaff(reqUser), userId);
+  const relations = await buildRelations([ticket], staff, userId);
   return createResponse(httpStatus.OK, 'Ticket marked as read.', {
     ticket: serializeTicket(ticket, relations, undefined, 0),
   });
