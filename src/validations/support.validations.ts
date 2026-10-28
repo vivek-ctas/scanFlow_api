@@ -107,6 +107,9 @@ export const getTicket = {
 
 export const markTicketAsRead = {
   ...ticketIdParams,
+  body: Joi.object().keys({
+    up_to: Joi.string().isoDate().optional(),
+  }),
 };
 
 export const listMessages = {
