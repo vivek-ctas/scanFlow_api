@@ -331,16 +331,17 @@ describe('support flow — customer + staff', () => {
       ticketId = res.body.data.ticket.id;
     });
 
-    it('returns ticket detail with messages', async () => {
+    it('returns ticket detail metadata only (no messages array)', async () => {
       const res = await request(app)
         .get(`/api/support/tickets/${ticketId}`)
         .set(bearer(orgAdminToken));
 
       expect(res.status).toBe(200);
       expect(res.body.data.ticket.id).toBe(ticketId);
-      expect(res.body.data.ticket.messages).toHaveLength(1);
-      expect(res.body.data.ticket.messages[0].body).toBe(
-        'Webhook not firing on scan completion.',
+      // Detail endpoint is metadata-only.
+      expect(res.body.data.ticket.messages).toBeUndefined();
+      expect(res.body.data.ticket.last_public_message?.preview).toContain(
+        'Webhook not firing',
       );
     });
 
@@ -356,7 +357,7 @@ describe('support flow — customer + staff', () => {
       expect(res.status).toBe(404);
     });
 
-    it('still returns the full (unpaginated) thread — contract unchanged', async () => {
+    it('returns metadata only — no full thread (paginated via /messages)', async () => {
       for (let i = 0; i < 35; i += 1) {
         await request(app)
           .post(`/api/support/tickets/${ticketId}/messages`)
@@ -369,8 +370,13 @@ describe('support flow — customer + staff', () => {
         .set(bearer(orgAdminToken));
 
       expect(res.status).toBe(200);
-      // 1 initial + 35 replies.
-      expect(res.body.data.ticket.messages).toHaveLength(36);
+      expect(res.body.data.ticket.id).toBe(ticketId);
+      // Detail endpoint is metadata-only: no messages array.
+      expect(res.body.data.ticket.messages).toBeUndefined();
+      // Metadata fields are still present.
+      expect(res.body.data.ticket.last_public_message).toBeDefined();
+      expect(res.body.data.ticket.viewer_last_read_at).toBeDefined();
+      expect(res.body.data.ticket.other_party_read_at).toBeDefined();
     });
   });
 
@@ -1264,12 +1270,14 @@ describe('support flow — customer + staff', () => {
       expect(ticket.assigned_to).toBeUndefined();
       expect(ticket.first_response_at).toBeUndefined();
       expect(ticket.awaiting).toBeUndefined();
-      expect(
-        ticket.messages.every((m: any) => m.is_internal === false && m.kind !== 'note'),
-      ).toBe(true);
-      expect(
-        ticket.messages.some((m: any) => m.body === 'Secret internal note.'),
-      ).toBe(false);
+      // Messages are no longer returned on the detail endpoint; verify via the
+      // paginated messages endpoint instead.
+      const messagesRes = await request(app)
+        .get(`/api/support/tickets/${ticketId}/messages`)
+        .set(bearer(orgAdminToken));
+      const messages = messagesRes.body.data.results;
+      expect(messages.every((m: any) => m.is_internal === false && m.kind !== 'note')).toBe(true);
+      expect(messages.some((m: any) => m.body === 'Secret internal note.')).toBe(false);
     });
 
     it('staff see the same ticket with all staff-only fields present', async () => {
@@ -1303,7 +1311,12 @@ describe('support flow — customer + staff', () => {
       expect(ticket.client_info).toMatchObject({ user_agent: 'staff-only/1.0' });
       expect(ticket.assigned_to?.id).toBe(String(superAdmin._id));
       expect(ticket).toHaveProperty('awaiting');
-      expect(ticket.messages.some((m: any) => m.is_internal === true)).toBe(true);
+      // Messages come from the paginated messages endpoint now.
+      const messagesRes = await request(app)
+        .get(`/api/support/tickets/${ticketId}/messages`)
+        .set(bearer(superToken));
+      const messages = messagesRes.body.data.results;
+      expect(messages.some((m: any) => m.is_internal === true)).toBe(true);
     });
   });
 
@@ -1583,8 +1596,10 @@ describe('support flow — customer + staff', () => {
         expect(String(duplicate?.id)).toBe(String(job.id));
 
         const { getSupportQueue } = await import('../src/queues/support.queue.js');
+        const { getNotificationQueue } = await import('../src/queues/notification.queue.js');
         await job.remove().catch(() => null);
         await getSupportQueue().close().catch(() => null);
+        await getNotificationQueue().close().catch(() => null);
       }
     });
   });

@@ -132,6 +132,26 @@ const envVarsSchema = Joi.object()
     STRIPE_WEBHOOK_SECRET: Joi.string()
       .allow('')
       .description('Stripe webhook signing secret'),
+    NOTIFY_QUOTA_THRESHOLDS: Joi.string()
+      .default('80,90,100')
+      .description('comma-separated quota alert thresholds %'),
+    NOTIFY_SUBSCRIPTION_REMINDER_DAYS: Joi.string()
+      .default('7,1')
+      .description(
+        'comma-separated in-app reminder windows (days before expiry)',
+      ),
+    NOTIFY_READ_RETENTION_DAYS: Joi.number()
+      .default(30)
+      .description('days after read before TTL deletion'),
+    NOTIFY_UNREAD_RETENTION_DAYS: Joi.number()
+      .default(90)
+      .description('days before TTL deletion for unread'),
+    NOTIFY_UNREAD_COUNT_CAP: Joi.number()
+      .default(100)
+      .description('max unread count before bell shows 99+'),
+    NOTIFY_REMINDER_INTERVAL_MINUTES: Joi.number()
+      .default(15)
+      .description('interval for reminder checks'),
     RAZORPAY_KEY_ID: Joi.string().allow('').description('Razorpay key id'),
     RAZORPAY_KEY_SECRET: Joi.string()
       .allow('')
@@ -227,6 +247,14 @@ export const config = {
     rateCreatePerHour: envVars.SUPPORT_RATE_CREATE_PER_HOUR,
     rateReplyPerHour: envVars.SUPPORT_RATE_REPLY_PER_HOUR,
     maxActivePerOrg: envVars.SUPPORT_MAX_ACTIVE_PER_ORG,
+  },
+  notification: {
+    quotaThresholds: envVars.NOTIFY_QUOTA_THRESHOLDS,
+    subscriptionReminderDays: envVars.NOTIFY_SUBSCRIPTION_REMINDER_DAYS,
+    readRetentionDays: envVars.NOTIFY_READ_RETENTION_DAYS,
+    unreadRetentionDays: envVars.NOTIFY_UNREAD_RETENTION_DAYS,
+    unreadCountCap: envVars.NOTIFY_UNREAD_COUNT_CAP,
+    reminderIntervalMinutes: envVars.NOTIFY_REMINDER_INTERVAL_MINUTES,
   },
   stripe: {
     secretKey: envVars.STRIPE_SECRET_KEY,
