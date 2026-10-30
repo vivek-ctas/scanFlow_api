@@ -3,6 +3,10 @@ import { Redis } from 'ioredis';
 import config from '../config/config.js';
 import { logger } from '../config/logger.js';
 import { isRedisConfigured } from './redis.js';
+import {
+  dispatchAppNotification,
+  enqueueAppNotification,
+} from './notification.queue.js';
 
 export type SupportNotificationEvent =
   'ticket_created' | 'customer_replied' | 'staff_replied' | 'status_changed';
@@ -38,10 +42,35 @@ export const getSupportQueue = (): Queue => {
 export const enqueueSupportNotification = async (
   job: SupportNotificationJob,
 ) => {
+  console.log(
+    `Enqueuing app-notification for ${job.event} ticket ${job.ticket_id}`,
+  );
+
+  // Write the in-app notification immediately so a row exists even when the
+  // separate worker process is not running. The queued job below retries and
+  // coalesces into the same unread row via its dedupe key.
+  await dispatchAppNotification({ source: 'support', ...job }).catch(
+    (err: Error) => {
+      logger.error(
+        `[NOTIFICATION] direct dispatch failed for ${job.event} ticket ${job.ticket_id}: ${err.message}`,
+      );
+    },
+  );
+
   if (!isRedisConfigured()) {
     logger.warn('[QUEUE] REDIS_URL not configured; support enqueue skipped');
     return null;
   }
+
+  // Mirror the email job onto the app-notifications queue.
+  await enqueueAppNotification({ source: 'support', ...job }).catch(
+    (err: Error) => {
+      logger.error(
+        `[QUEUE] app-notification enqueue failed for ${job.event} ticket ${job.ticket_id}: ${err.message}`,
+      );
+    },
+  );
+
   const q = getSupportQueue();
   const suffix = job.message_id || job.status || 'status';
   return q.add(job.event, job, {

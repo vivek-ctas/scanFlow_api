@@ -6,6 +6,7 @@ export const listNotifications = {
     page: Joi.number().integer().min(1).default(1),
     limit: Joi.number().integer().min(1).max(50).default(20),
     sortBy: Joi.string().trim().optional(),
+    unread_only: Joi.boolean().optional(),
   }),
 };
 

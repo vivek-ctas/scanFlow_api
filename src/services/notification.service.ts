@@ -6,6 +6,7 @@ import {
   NotificationSeverity,
 } from '../models/notification.model.js';
 import { createResponse } from './common.service.js';
+import { logger } from '../config/logger.js';
 
 export interface CreateForUsersInput {
   user_ids: string[];
@@ -24,39 +25,45 @@ export const createForUsers = async (inputs: CreateForUsersInput) => {
 
   const created: any[] = [];
   for (const userIdStr of user_ids) {
-    const userId = new mongoose.Types.ObjectId(userIdStr);
-    const key = dedupe_key || `${type}:${userIdStr}`;
+    try {
+      const userId = new mongoose.Types.ObjectId(userIdStr);
+      const key = dedupe_key || `${type}:${userIdStr}`;
 
-    const existing = await Notification.findOne({
-      user_id: userId,
-      is_read: false,
-      dedupe_key: key,
-    }).lean();
-
-    if (existing) {
-      await Notification.updateOne(
-        { _id: existing._id },
-        {
-          message: message || existing.message,
-          title: title || existing.title,
-          action_url: action_url || existing.action_url,
-          expires_at: new Date(Date.now() + 90 * 86400000),
-        },
-      );
-      created.push({ ...existing, message, title, action_url });
-    } else {
-      const notification = await Notification.create({
+      const existing = await Notification.findOne({
         user_id: userId,
-        type,
-        severity: severity || 'info',
-        title: title || 'Notification',
-        message: message || 'You have a new notification',
-        action_url,
-        dedupe_key: key,
-        expires_at: new Date(Date.now() + 90 * 86400000),
         is_read: false,
-      });
-      created.push(notification);
+        dedupe_key: key,
+      }).lean();
+
+      if (existing) {
+        await Notification.updateOne(
+          { _id: existing._id },
+          {
+            message: message || existing.message,
+            title: title || existing.title,
+            action_url: action_url || existing.action_url,
+            expires_at: new Date(Date.now() + 90 * 86400000),
+          },
+        );
+        created.push({ ...existing, message, title, action_url });
+      } else {
+        const notification = await Notification.create({
+          user_id: userId,
+          type,
+          severity: severity || 'info',
+          title: title || 'Notification',
+          message: message || 'You have a new notification',
+          action_url,
+          dedupe_key: key,
+          expires_at: new Date(Date.now() + 90 * 86400000),
+          is_read: false,
+        });
+        created.push(notification);
+      }
+    } catch (err: any) {
+      logger.error(
+        `[NOTIFICATION] failed to create notification for user ${userIdStr}: ${err.message}`,
+      );
     }
   }
   return created;
@@ -81,10 +88,15 @@ export const listNotifications = async (
     }
   });
 
-  const [total_results, results] = await Promise.all([
+  const [total_results, rows] = await Promise.all([
     Notification.countDocuments(filter).exec(),
     Notification.find(filter).sort(sortOptions).skip(skip).limit(limit).lean(),
   ]);
+
+  const results = rows.map(({ _id, __v, ...rest }) => ({
+    id: String(_id),
+    ...rest,
+  }));
 
   return createResponse(httpStatus.OK, 'Notifications fetched successfully.', {
     results,
