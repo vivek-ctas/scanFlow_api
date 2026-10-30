@@ -15,6 +15,24 @@ const storage = new AsyncLocalStorage<RequestContext>();
  * writer can record "who did what from where" without threading extra arguments
  * through every service signature.
  */
+const getClientIp = (req: Request): string | undefined => {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    const first = forwarded.split(',')[0]?.trim();
+    if (first) return first;
+  }
+  if (Array.isArray(forwarded) && forwarded[0]) {
+    const first = String(forwarded[0]).split(',')[0]?.trim();
+    if (first) return first;
+  }
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.trim()) return realIp.trim();
+  if (req.ip) return req.ip;
+  const socketIp = (req.socket as any)?.remoteAddress;
+  if (socketIp) return String(socketIp);
+  return undefined;
+};
+
 export const requestContext = (
   req: Request,
   _res: Response,
@@ -23,7 +41,7 @@ export const requestContext = (
   const user = (req as any).user;
   storage.run(
     {
-      ip: req.ip,
+      ip: getClientIp(req),
       actor_id: user?._id ? String(user._id) : null,
       actor_role: user?.role ?? null,
       organization_id: user?.organization_id

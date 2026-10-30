@@ -20,6 +20,7 @@ export interface ISubscription extends Document {
   expires_at: Date;
   queue_priority?: number;
   reminders_sent: number[];
+  app_reminders_sent: number[];
   marketing_features: string[];
   trial_days: number;
   currency_code: string;
@@ -76,6 +77,7 @@ const subscriptionSchema = new Schema<ISubscription, ISubscriptionModel>(
     expires_at: { type: Date, required: true },
     queue_priority: { type: Number },
     reminders_sent: { type: [Number], default: [] },
+    app_reminders_sent: { type: [Number], default: [] },
     marketing_features: { type: [String], default: [] },
     trial_days: { type: Number, default: 0, min: 0 },
     currency_code: {

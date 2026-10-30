@@ -19,3 +19,4 @@ export { Counter } from './counter.model.js';
 export { SupportTicket } from './support-ticket.model.js';
 export { SupportMessage } from './support-message.model.js';
 export { Faq } from './support-faq.model.js';
+export { Notification } from './notification.model.js';

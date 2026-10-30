@@ -1,10 +1,13 @@
 import httpStatus from 'http-status';
+import config from '../config/config.js';
 import { Organization } from '../models/organization.model.js';
 import { Subscription } from '../models/subscription.model.js';
 import { Usage } from '../models/usage.model.js';
+import { User } from '../models/index.js';
 import { ApiError } from '../utils/ApiError.js';
 import { getRedis, isRedisConfigured } from '../queues/redis.js';
 import { logger } from '../config/logger.js';
+import { Notification } from '../models/index.js';
 
 export const activeSubscriptionCacheKey = (organizationId: string): string =>
   `org:${organizationId}:activeSub`;
@@ -290,4 +293,113 @@ export const assertOrganizationActive = async (
     );
   }
   return org;
+};
+
+/**
+ * Checks quota thresholds against the fresh usage mirror and creates notifications.
+ * Runs after the 30-second reconcile cycle; reads tbl_usage, never touches Redis or scan path.
+ * Only the highest crossed level per usage row is sent; unlimited (scan_limit 0) is skipped.
+ * Two concurrent runs are safe because of the conditional findOneAndUpdate with $or.
+ */
+export const checkQuotaAlerts = async (): Promise<void> => {
+  try {
+    // 1. Get all active subscriptions (status: 'active' and expires_at > now)
+    const activeSubs = await Subscription.find({
+      status: 'active',
+      expires_at: { $gt: new Date() },
+    }).select('_id organization_id');
+
+    if (activeSubs.length === 0) {
+      logger.info('[QUOTA] no active subscriptions');
+      return;
+    }
+
+    const activeSubIds = activeSubs.map((sub) => sub._id);
+    const activeOrgs = new Set(activeSubs.map((sub) => sub.organization_id));
+
+    // 2. Get thresholds from config
+    const thresholds = config.notification.quotaThresholds
+      .split(',')
+      .map(Number); // e.g. [80, 90, 100]
+
+    // 3. For each active org, find usage rows with scan_limit > 0
+    for (const orgId of activeOrgs) {
+      const usageRows = await Usage.find({
+        organization_id: orgId,
+        subscription_id: { $in: activeSubIds },
+        scan_limit: { $gt: 0 },
+      }).lean();
+
+      if (usageRows.length === 0) continue;
+
+      // 4. For each usage row, check crossed thresholds
+      for (const row of usageRows) {
+        const usedPct = (row.usage / row.scan_limit) * 100;
+        if (isNaN(usedPct)) continue;
+
+        // Find the highest threshold this row has crossed
+        let highestCrossed = 0;
+        for (const t of thresholds) {
+          if (usedPct >= t) highestCrossed = t;
+        }
+
+        if (highestCrossed === 0) continue; // no threshold crossed
+
+        // 5. Only create notification if the new level is higher than stored
+        if (row.quota_alert_level >= highestCrossed) continue;
+
+        // 6. Resolve org admins (active only)
+        const admins = await User.find({
+          role: 'ORGANIZATION_ADMIN',
+          organization_id: orgId,
+          status: 1,
+        }).select('_id');
+
+        if (admins.length === 0) continue;
+
+        const adminIds = admins.map((a) => a._id);
+
+        // 7. Conditional create via findOneAndUpdate with dedupe_key
+        const result = await Notification.findOneAndUpdate(
+          {
+            user_id: { $in: adminIds },
+            type: 'quota_alert',
+            dedupe_key: `subscription:${row.subscription_id}:quota`,
+          },
+          {
+            $set: {
+              severity: highestCrossed >= 100 ? 'critical' : 'warning',
+              title:
+                highestCrossed >= 100
+                  ? 'Scan limit reached'
+                  : '80% of your scan limit used',
+              message:
+                highestCrossed >= 100
+                  ? `You have used 100% of your scan limit (${row.usage} of ${row.scan_limit}). New scans are rejected until your plan is renewed.`
+                  : `You have used ${highestCrossed}% of your scan limit (${row.usage} of ${row.scan_limit}).`,
+              action_url: '/',
+              expires_at: new Date(Date.now() + 90 * 86400000),
+              is_read: false,
+            },
+            $setOnInsert: {
+              user_id: adminIds[0],
+            },
+          },
+          { upsert: true, new: true, runValidators: true },
+        ).lean();
+
+        // 8. Update the usage row's quota_alert_level atomically
+        await Usage.updateOne(
+          { _id: row._id },
+          { $set: { quota_alert_level: highestCrossed } },
+        );
+
+        logger.info(
+          `[QUOTA] notification ${result ? 'created' : 'skipped'} for org ${orgId} sub ${row.subscription_id} at ${highestCrossed}%`,
+        );
+      }
+    }
+  } catch (err: any) {
+    logger.error(`[QUOTA] checkQuotaAlerts failed: ${err.message}`);
+  }
 };

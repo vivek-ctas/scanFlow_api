@@ -14,6 +14,7 @@ export interface IUsage extends Document {
   last_used_at?: Date;
   is_exhausted: boolean;
   purge_after: Date;
+  quota_alert_level: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -45,6 +46,7 @@ const usageSchema = new Schema<IUsage, IUsageModel>(
     expires_at: { type: Date, required: true },
     last_used_at: { type: Date },
     is_exhausted: { type: Boolean, default: false },
+    quota_alert_level: { type: Number, default: 0 },
     purge_after: {
       type: Date,
       default: () => new Date(Date.now() + USAGE_RETENTION_DAYS * 86400000),

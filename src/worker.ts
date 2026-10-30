@@ -9,6 +9,7 @@ import {
   sweepWebhookBatches,
 } from './queues/webhook.worker.js';
 import { startSupportWorker } from './queues/support.worker.js';
+import { startNotificationWorker } from './queues/notification.queue.js';
 import { runAutoCloseJob } from './services/support.service.js';
 import { withCronRun } from './cron/cron-runner.js';
 import { reconcileScanUsage } from './services/quota.service.js';
@@ -21,6 +22,9 @@ import {
 
 let worker: Awaited<ReturnType<typeof startWebhookWorker>> | null = null;
 let supportWorker: Awaited<ReturnType<typeof startSupportWorker>> | null = null;
+let notificationWorker: Awaited<
+  ReturnType<typeof startNotificationWorker>
+> | null = null;
 let supportAutoCloseTimer: NodeJS.Timeout | null = null;
 let reconcileTimer: NodeJS.Timeout | null = null;
 let activationTimer: NodeJS.Timeout | null = null;
@@ -97,6 +101,9 @@ const start = async () => {
   supportWorker = await startSupportWorker();
   logger.info('Support worker ready');
 
+  notificationWorker = await startNotificationWorker();
+  logger.info('Notification worker ready');
+
   // Signal liveness immediately and independently of the reconcile loop, so a
   // slow or hung maintenance pass can never suppress the dashboard heartbeat.
   await writeHeartbeat();
@@ -151,6 +158,9 @@ const shutdown = async () => {
   }
   if (supportWorker) {
     await supportWorker.close();
+  }
+  if (notificationWorker) {
+    await notificationWorker.close();
   }
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();

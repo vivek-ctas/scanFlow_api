@@ -49,6 +49,7 @@ export const ACTIVE_SUPPORT_STATUSES: SupportStatus[] = [
 export interface ISupportLastPublicMessage {
   preview: string;
   by_role: string;
+  by_user_id?: mongoose.Types.ObjectId | null;
   at: Date;
 }
 
@@ -73,6 +74,9 @@ export interface ISupportTicket extends Document {
   client_info?: Record<string, any> | null;
   /** Per-user last read timestamp (Map: userId -> Date). */
   last_read_at?: Map<string, Date>;
+  /** Role-level read cursors */
+  customer_read_at?: Date | null;
+  staff_read_at?: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -88,6 +92,11 @@ const supportLastPublicMessageSchema = new Schema<ISupportLastPublicMessage>(
   {
     preview: { type: String, trim: true, default: '', maxlength: 80 },
     by_role: { type: String, trim: true, default: '' },
+    by_user_id: {
+      type: Schema.Types.ObjectId,
+      ref: 'tbl_user',
+      default: null,
+    },
     at: { type: Date, default: null },
   },
   { _id: false },
@@ -159,12 +168,18 @@ const supportTicketSchema = new Schema<ISupportTicket, ISupportTicketModel>(
       of: Date,
       default: {},
     },
+    customer_read_at: { type: Date, default: null },
+    staff_read_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },
 );
 
-supportTicketSchema.index({ organization_id: 1, status: 1, updated_at: -1 });
-supportTicketSchema.index({ status: 1, updated_at: -1 });
+supportTicketSchema.index({
+  organization_id: 1,
+  status: 1,
+  'last_public_message.at': -1,
+});
+supportTicketSchema.index({ status: 1, last_message_at: -1 });
 supportTicketSchema.index({ assigned_to: 1, status: 1 });
 
 supportTicketSchema.plugin(toJSON);

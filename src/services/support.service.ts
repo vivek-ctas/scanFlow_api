@@ -45,8 +45,12 @@ const nameOf = (user: any): string | null => {
   return parts.length ? parts.join(' ') : null;
 };
 
-const toSortBy = (sortBy?: string): string => {
-  if (!sortBy) return 'updated_at:desc';
+const toSortBy = (sortBy: string | undefined, staff: boolean): string => {
+  if (!sortBy) {
+    return staff
+      ? 'last_message_at:desc,_id:desc'
+      : 'last_public_message.at:desc,_id:desc';
+  }
   return sortBy
     .split(',')
     .map((option) => option.trim())
@@ -234,6 +238,7 @@ const buildRelations = async (
   tickets: (ISupportTicket | Record<string, any>)[],
   staff: boolean,
   currentUserId: string,
+  extraUserIds: unknown[] = [],
 ): Promise<TicketRelations> => {
   const userIds = new Set<string>();
   const orgIds = new Set<string>();
@@ -241,6 +246,9 @@ const buildRelations = async (
     if (ticket.created_by) userIds.add(String(ticket.created_by));
     if (ticket.assigned_to) userIds.add(String(ticket.assigned_to));
     if (ticket.organization_id) orgIds.add(String(ticket.organization_id));
+  }
+  for (const id of extraUserIds) {
+    if (id) userIds.add(String(id));
   }
 
   const [users, orgs] = await Promise.all([
@@ -297,24 +305,39 @@ const computeAwaiting = (ticket: any) => {
   };
 };
 
-const senderLabel = (message: any, staff: boolean): string => {
+const senderLabel = (
+  message: any,
+  staff: boolean,
+  userMap?: Map<string, string | null>,
+): string => {
   if (message.sender_role === 'SUPER_ADMIN') return 'ScanFlow Support';
   if (message.sender_role === 'system') return 'System';
-  return staff ? 'Customer' : 'You';
+  if (!staff) return 'You';
+  const name = message.sender_id
+    ? userMap?.get(String(message.sender_id))
+    : null;
+  return name || 'Customer';
 };
 
 /**
  * Plain-text preview of a message for the chat list. Attachment-only messages
- * fall back to a placeholder; the result is capped at 80 characters.
+ * use the image/file wording from the plan; the result is capped at 80 chars.
  */
 const PREVIEW_MAX = 80;
 export const buildPreview = (
   body: unknown,
-  hasAttachments: boolean,
+  attachments: Array<{ file_name?: string; content_type?: string }> = [],
 ): string => {
   const text = typeof body === 'string' ? body.replace(/\s+/g, ' ').trim() : '';
-  if (!text) return hasAttachments ? '📎 Attachment' : '';
-  return text.slice(0, PREVIEW_MAX);
+  if (text) return text.slice(0, PREVIEW_MAX);
+  if (!attachments.length) return '';
+  if (attachments.length > 1) return `📎 ${attachments.length} attachments`;
+  const attachment = attachments[0];
+  if (!attachment) return '';
+  if (String(attachment.content_type ?? '').startsWith('image/')) {
+    return '📷 Photo';
+  }
+  return `📎 ${attachment.file_name ?? 'Attachment'}`;
 };
 
 /**
@@ -338,21 +361,48 @@ const computeYourTurn = (ticket: any, staff: boolean): boolean => {
   );
 };
 
-const serializeLastPublicMessage = (ticket: any) => {
+const serializeLastPublicMessage = (
+  ticket: any,
+  staff: boolean,
+  viewerId?: string,
+) => {
   const preview = ticket.last_public_message;
   if (!preview) return null;
+
+  const byUserId = preview.by_user_id ? String(preview.by_user_id) : null;
+  const isMine = byUserId
+    ? byUserId === String(viewerId ?? '')
+    : staff
+      ? preview.by_role === 'SUPER_ADMIN'
+      : preview.by_role === 'ORGANIZATION_ADMIN';
+  const otherCursor = staff ? ticket.customer_read_at : ticket.staff_read_at;
+  const read = Boolean(
+    otherCursor &&
+    preview.at &&
+    new Date(preview.at).getTime() <= new Date(otherCursor).getTime(),
+  );
+
   return {
     preview: preview.preview ?? '',
     by_role: preview.by_role ?? '',
+    is_mine: isMine,
+    read,
     at: preview.at ?? null,
   };
 };
 
-const serializeMessage = (message: any, staff: boolean) => {
+const serializeMessage = (
+  message: any,
+  staff: boolean,
+  viewerId?: string,
+  userMap?: Map<string, string | null>,
+) => {
+  const label = senderLabel(message, staff, userMap);
   const out: Record<string, any> = {
     id: String(message._id),
     kind: message.kind,
-    sender_label: senderLabel(message, staff),
+    sender_label: label,
+    sender_name: label,
     body: message.body,
     event: message.event ?? null,
     attachments: message.attachments ?? [],
@@ -360,17 +410,35 @@ const serializeMessage = (message: any, staff: boolean) => {
     created_at: message.created_at,
   };
   out.sender_role = message.sender_role;
-  if (staff) {
-    out.sender_id = message.sender_id ? String(message.sender_id) : null;
+  out.sender_id = message.sender_id ? String(message.sender_id) : null;
+  if (viewerId) {
+    if (message.sender_id) {
+      out.is_mine = String(message.sender_id) === String(viewerId);
+    } else {
+      out.is_mine = false;
+    }
   }
   return out;
 };
 
+/** Read last_read_at for a user from either a Map (Mongoose doc) or plain object (lean). */
+const readAtFor = (ticket: any, userId: string): Date | null => {
+  const lr = ticket.last_read_at;
+  if (!lr) return null;
+  if (typeof lr.get === 'function') {
+    const v = lr.get(userId);
+    return v ? new Date(v) : null;
+  }
+  const v = lr[userId];
+  return v ? new Date(v) : null;
+};
+
 const serializeTicket = (
   ticket: any,
-  relations: TicketRelations,
-  messages?: any[],
+  relations: any,
+  messages?: ISupportMessage[],
   precomputedUnreadCount?: number,
+  viewerId?: string,
 ) => {
   const { staff, userMap, orgMap, currentUserId } = relations;
   const out: Record<string, any> = {
@@ -386,7 +454,11 @@ const serializeTicket = (
     closed_at: ticket.closed_at ?? null,
     last_customer_message_at: ticket.last_customer_message_at ?? null,
     last_staff_message_at: ticket.last_staff_message_at ?? null,
-    last_public_message: serializeLastPublicMessage(ticket),
+    last_public_message: serializeLastPublicMessage(
+      ticket,
+      staff,
+      String(viewerId ?? currentUserId ?? ''),
+    ),
     your_turn: computeYourTurn(ticket, staff),
     related_faq_id: ticket.related_faq_id
       ? String(ticket.related_faq_id)
@@ -401,16 +473,16 @@ const serializeTicket = (
 
   // Compute unread_count
   if (messages) {
-    out.messages = messages.map((m) => serializeMessage(m, staff));
-    const lastReadAt = ticket.last_read_at?.get?.(currentUserId)
-      ? new Date(ticket.last_read_at.get(currentUserId))
-      : null;
+    out.messages = messages.map((m) =>
+      serializeMessage(m, staff, viewerId || currentUserId, userMap),
+    );
+    const lastReadAt = readAtFor(ticket, currentUserId);
     out.unread_count = messages.filter((m: any) => {
-      if (m.is_internal) return false;
-      const isFromOther = staff
-        ? m.sender_role !== 'SUPER_ADMIN'
-        : m.sender_role === 'SUPER_ADMIN';
-      if (!isFromOther) return false;
+      if (m.kind === 'event') return false;
+      if (!staff && m.is_internal) return false;
+      if (m.sender_id && String(m.sender_id) === String(currentUserId)) {
+        return false;
+      }
       if (!lastReadAt) return true;
       return new Date(m.created_at).getTime() > lastReadAt.getTime();
     }).length;
@@ -442,7 +514,7 @@ const serializeTicket = (
   return out;
 };
 
-// Compute real unread counts for multiple tickets in a single query
+// Compute unread counts for a whole page with one grouped message query.
 const computeUnreadCounts = async (
   ticketIds: mongoose.Types.ObjectId[],
   staff: boolean,
@@ -450,36 +522,43 @@ const computeUnreadCounts = async (
 ): Promise<Map<string, number>> => {
   if (!ticketIds.length) return new Map();
 
-  // Get tickets with their last_read_at for current user
   const tickets = await SupportTicket.find({ _id: { $in: ticketIds } })
-    .select('last_read_at organization_id')
+    .select('last_read_at')
     .lean();
 
-  const lastReadAtMap = new Map<string, Date | null>();
+  const cursorByTicket = new Map<string, Date>();
   for (const t of tickets) {
-    const lr = t.last_read_at?.get?.(currentUserId);
-    lastReadAtMap.set(String(t._id), lr ? new Date(lr) : null);
+    cursorByTicket.set(
+      String(t._id),
+      readAtFor(t, currentUserId) ?? new Date(0),
+    );
   }
 
-  // Fetch relevant messages and count in JS (simpler than aggregation with Map lookup)
-  const messages = await SupportMessage.find({
-    ticket_id: { $in: ticketIds },
-    is_internal: false,
-    sender_role: staff ? { $ne: 'SUPER_ADMIN' } : 'SUPER_ADMIN',
-  })
-    .select('ticket_id created_at')
-    .lean();
+  const clauses = ticketIds.map((id) => ({
+    ticket_id: id,
+    created_at: { $gt: cursorByTicket.get(String(id)) ?? new Date(0) },
+  }));
+
+  const rows = await SupportMessage.aggregate<{
+    _id: mongoose.Types.ObjectId;
+    count: number;
+  }>([
+    {
+      $match: {
+        $or: clauses,
+        kind: { $ne: 'event' },
+        sender_id: { $ne: toObjectId(currentUserId) },
+        ...(staff ? {} : { is_internal: false }),
+      },
+    },
+    { $group: { _id: '$ticket_id', count: { $sum: 1 } } },
+  ]).option({ maxTimeMS: 5000 });
 
   const counts = new Map<string, number>();
-  for (const msg of messages) {
-    const tid = String(msg.ticket_id);
-    const lastRead = lastReadAtMap.get(tid);
-    if (!lastRead || new Date(msg.created_at).getTime() > lastRead.getTime()) {
-      counts.set(tid, (counts.get(tid) ?? 0) + 1);
-    }
+  for (const row of rows) {
+    counts.set(String(row._id), row.count);
   }
 
-  // Ensure all ticket IDs have an entry (0 if no unread)
   const result = new Map<string, number>();
   for (const id of ticketIds) {
     result.set(String(id), counts.get(String(id)) ?? 0);
@@ -641,9 +720,11 @@ export const createTicket = async (
     ticketId: String(ticketId),
   });
 
+  const creatorIsStaff = isStaff(reqUser);
   const firstPreview = {
-    preview: buildPreview(body.description, attachments.length > 0),
+    preview: buildPreview(body.description, attachments),
     by_role: reqUser.role,
+    by_user_id: reqUser._id,
     at: now,
   };
 
@@ -667,6 +748,10 @@ export const createTicket = async (
       related_faq_id,
       client_info: sanitizeClientInfo(body.client_info),
       smart_context,
+      // The creator's own first message must never count as unread.
+      last_read_at: { [String(reqUser._id)]: now },
+      customer_read_at: creatorIsStaff ? null : now,
+      staff_read_at: creatorIsStaff ? now : null,
     });
 
     await SupportMessage.create({
@@ -797,7 +882,7 @@ export const listTickets = async (
   }
 
   const tickets = await (SupportTicket as any).paginate(query, {
-    sortBy: toSortBy(options.sort_by ?? options.sortBy),
+    sortBy: toSortBy(options.sort_by ?? options.sortBy, staff),
     limit: options.limit ?? 10,
     page: options.page ?? 1,
   });
@@ -821,6 +906,7 @@ export const listTickets = async (
       relations,
       undefined,
       unreadCounts.get(String(ticket._id)) ?? 0,
+      String(reqUser._id),
     ),
   );
 
@@ -849,19 +935,23 @@ export const getTicketDetail = async (reqUser: any, ticketId: string) => {
   );
   if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Ticket not found');
 
-  const messageQuery: Record<string, any> = {
-    ticket_id: ticket._id,
-    organization_id: ticket.organization_id,
-  };
-  if (!staff) messageQuery.is_internal = false;
-
-  const messages: ISupportMessage[] = await SupportMessage.find(
-    messageQuery,
-  ).sort({ created_at: 1 });
-
-  const relations = await buildRelations([ticket], staff, String(reqUser._id));
+  const viewerId = String(reqUser._id);
+  const relations = await buildRelations([ticket], staff, viewerId);
+  const unreadCounts = await computeUnreadCounts([ticket._id], staff, viewerId);
+  // Metadata only — the chat loads messages from the paginated endpoint.
+  const serialized = serializeTicket(
+    ticket,
+    relations,
+    undefined,
+    unreadCounts.get(String(ticket._id)) ?? 0,
+    viewerId,
+  );
+  (serialized as any).viewer_last_read_at = readAtFor(ticket, viewerId);
+  (serialized as any).other_party_read_at = staff
+    ? ticket.customer_read_at
+    : ticket.staff_read_at;
   return createResponse(httpStatus.OK, 'Support ticket fetched successfully.', {
-    ticket: serializeTicket(ticket, relations, messages),
+    ticket: serialized,
   });
 };
 
@@ -914,15 +1004,33 @@ export const listMessages = async (
   // Return in chronological order regardless of the query direction.
   if (!params.after) page.reverse();
 
-  const relations = await buildRelations([ticket], staff, String(reqUser._id));
-  const ticketState = serializeTicket(ticket, relations);
+  const viewerId = String(reqUser._id);
+  const relations = await buildRelations(
+    [ticket],
+    staff,
+    viewerId,
+    page.map((m) => m.sender_id),
+  );
+  const ticketState = serializeTicket(
+    ticket,
+    relations,
+    undefined,
+    undefined,
+    viewerId,
+  );
 
   return createResponse(
     httpStatus.OK,
     'Support messages fetched successfully.',
     {
-      results: page.map((m) => serializeMessage(m, staff)),
+      results: page.map((m) =>
+        serializeMessage(m, staff, viewerId, relations.userMap),
+      ),
       has_more: hasMore,
+      viewer_last_read_at: readAtFor(ticket, viewerId),
+      other_party_read_at: staff
+        ? ticket.customer_read_at
+        : ticket.staff_read_at,
       ticket: {
         status: ticketState.status,
         priority: ticketState.priority,
@@ -946,6 +1054,14 @@ export const addMessage = async (
 ) => {
   const staff = isStaff(reqUser);
   const ticket = await loadTicketForWrite(reqUser, ticketId);
+
+  const msg = typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!msg && (!files || files.length === 0)) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Write a message or attach a file',
+    );
+  }
 
   // Idempotency: a retried reply carrying the same client_message_id returns
   // the existing message instead of inserting a duplicate (mirrors
@@ -993,7 +1109,7 @@ export const addMessage = async (
       sender_role: reqUser.role,
       kind: 'reply',
       is_internal: false,
-      body: body.message,
+      body: msg,
       attachments,
       client_message_id: clientMessageId,
     });
@@ -1024,8 +1140,9 @@ export const addMessage = async (
   const updates: Record<string, any> = {
     last_message_at: now,
     last_public_message: {
-      preview: buildPreview(body.message, attachments.length > 0),
-      by_role: reqUser.role,
+      preview: buildPreview(msg, attachments),
+      by_role: message.sender_role,
+      by_user_id: message.sender_id ?? null,
       at: now,
     },
   };
@@ -1101,9 +1218,21 @@ export const addMessage = async (
     actorId: reqUser._id,
     organizationId: ticket.organization_id,
   });
+  const viewerId = String(reqUser._id);
+  const unreadCounts = await computeUnreadCounts(
+    [(updated ?? ticket)._id],
+    staff,
+    viewerId,
+  );
   return createResponse(httpStatus.OK, 'Reply added successfully.', {
-    ticket: serializeTicket(updated ?? ticket, relations),
-    message: serializeMessage(message, staff),
+    ticket: serializeTicket(
+      updated ?? ticket,
+      relations,
+      undefined,
+      unreadCounts.get(String((updated ?? ticket)._id)) ?? 0,
+      viewerId,
+    ),
+    message: serializeMessage(message, staff, viewerId, relations.userMap),
   });
 };
 export const closeTicket = async (reqUser: any, ticketId: string) => {
@@ -1164,6 +1293,11 @@ export const addNote = async (
   body: ReplyBody,
 ) => {
   const ticket = await loadTicketForWrite(reqUser, ticketId);
+  const trimmedMessage =
+    typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!trimmedMessage) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Note is required');
+  }
   const now = new Date();
 
   await SupportMessage.create({
@@ -1173,7 +1307,7 @@ export const addNote = async (
     sender_role: reqUser.role,
     kind: 'note',
     is_internal: true,
-    body: body.message,
+    body: trimmedMessage,
   });
   await SupportTicket.findByIdAndUpdate(ticket._id, {
     $set: { last_message_at: now },
@@ -1411,28 +1545,51 @@ export const listStaff = async () => {
   });
 };
 
-export const markTicketAsRead = async (reqUser: any, ticketId: string) => {
+export const markTicketAsRead = async (
+  reqUser: any,
+  ticketId: string,
+  upTo?: string,
+) => {
   const orgScope = resolveOrganizationScope(reqUser, undefined);
   const query: Record<string, any> = { _id: toObjectId(ticketId) };
   if (orgScope) query.organization_id = orgScope;
 
-  const now = new Date();
+  const now = Date.now();
+  const requested = upTo ? new Date(upTo) : new Date(now);
+  const cursor = Number.isNaN(requested.getTime())
+    ? new Date(now)
+    : new Date(Math.min(requested.getTime(), now));
   const userId = String(reqUser._id);
+  const staff = isStaff(reqUser);
 
-  const ticket = await SupportTicket.findOneAndUpdate(
-    query,
-    {
-      $set: { [`last_read_at.${userId}`]: now },
+  const update: Record<string, any> = {
+    $max: {
+      [`last_read_at.${userId}`]: cursor,
     },
-    { new: true },
-  );
+  };
+  if (staff) {
+    update.$max.staff_read_at = cursor;
+  } else {
+    update.$max.customer_read_at = cursor;
+  }
+
+  const ticket = await SupportTicket.findOneAndUpdate(query, update, {
+    new: true,
+    timestamps: false,
+  });
 
   if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Ticket not found');
 
-  // Return updated unread_count (0)
-  const relations = await buildRelations([ticket], isStaff(reqUser), userId);
+  const unreadCounts = await computeUnreadCounts([ticket._id], staff, userId);
+  const relations = await buildRelations([ticket], staff, userId);
   return createResponse(httpStatus.OK, 'Ticket marked as read.', {
-    ticket: serializeTicket(ticket, relations),
+    ticket: serializeTicket(
+      ticket,
+      relations,
+      undefined,
+      unreadCounts.get(String(ticket._id)) ?? 0,
+      userId,
+    ),
   });
 };
 

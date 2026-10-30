@@ -107,6 +107,9 @@ export const getTicket = {
 
 export const markTicketAsRead = {
   ...ticketIdParams,
+  body: Joi.object().keys({
+    up_to: Joi.string().isoDate().optional(),
+  }),
 };
 
 export const listMessages = {
@@ -121,9 +124,7 @@ export const listMessages = {
 export const addMessage = {
   ...ticketIdParams,
   body: Joi.object().keys({
-    message: Joi.string().trim().min(1).max(5000).required().messages({
-      'string.empty': 'Message is required',
-      'any.required': 'Message is required',
+    message: Joi.string().trim().max(5000).allow('').optional().messages({
       'string.max': 'Message must be at most 5000 characters',
     }),
     client_message_id: Joi.string().trim().min(1).max(100).optional(),

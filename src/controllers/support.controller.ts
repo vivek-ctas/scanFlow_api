@@ -139,6 +139,7 @@ export const markTicketAsRead = catchAsync(
     const result = await supportService.markTicketAsRead(
       req.user,
       String(req.params.ticketId),
+      req.body?.up_to ? String(req.body.up_to) : undefined,
     );
     res.status(result.status).json(result);
   },

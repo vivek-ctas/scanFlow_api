@@ -49,6 +49,15 @@ export const supportCreateLimiter = rateLimit({
   keyGenerator: userKey,
 });
 
+/** Per-user cap on read-marker writes (generous; the client debounces). */
+export const supportReadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 240,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userKey,
+});
+
 /** Per-user cap on support replies/notes (default 60/hour). */
 export const supportReplyLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,

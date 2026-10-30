@@ -3,6 +3,7 @@ import { auth } from '../middlewares/auth.js';
 import { validate } from '../middlewares/validate.js';
 import {
   supportCreateLimiter,
+  supportReadLimiter,
   supportReplyLimiter,
 } from '../middlewares/rateLimiter.js';
 import { supportUpload } from '../middlewares/supportUpload.js';
@@ -73,6 +74,7 @@ router.post(
 router.post(
   '/tickets/:ticketId/read',
   auth('viewSupport'),
+  supportReadLimiter,
   validate(supportValidation.markTicketAsRead),
   supportController.markTicketAsRead,
 );
