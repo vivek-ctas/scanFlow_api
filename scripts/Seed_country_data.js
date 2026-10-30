@@ -1,5 +1,5 @@
 // One-time script: world na badhi countries MongoDB ma insert kare che
-// Collection: tbl_country_data  |  Fields: country_name, country_code, currency_code
+// Collection: tbl_country_data  |  Fields: country_name, country_code, iso_2, currency_code
 
 import 'dotenv/config';
 import { MongoClient } from 'mongodb';
@@ -22,9 +22,10 @@ async function fetchCountries() {
         .map((c) => ({
             country_name: c.name?.common,
             country_code: c.cca3, // ISO 3166-1 alpha-3 (e.g. IND, USA)
+            iso_2: c.cca2, // ISO 3166-1 alpha-2 (e.g. IN, US)
             currency_code: c.currencies ? Object.keys(c.currencies)[0] : null, // e.g. INR, USD
         }))
-        .filter((c) => c.country_name && c.country_code)
+        .filter((c) => c.country_name && c.country_code && c.iso_2)
         .sort((a, b) => a.country_name.localeCompare(b.country_name));
 }
 
@@ -38,14 +39,26 @@ async function main() {
         await client.connect();
         const col = client.db().collection(COLLECTION); // db name URL mathi (db_scanflow) aavse
 
-        await col.createIndex({ country_code: 1 }, { unique: true });
+        try {
+            await col.createIndex({ country_code: 1 });
+            await col.createIndex({ iso_2: 1 });
+        } catch (e) {
+            // index already exists
+        }
 
         // upsert -> script ne farithi run karo to duplicate nahi thay
         const result = await col.bulkWrite(
             countries.map((c) => ({
                 updateOne: {
                     filter: { country_code: c.country_code },
-                    update: { $set: c },
+                    update: {
+                        $set: {
+                            country_name: c.country_name,
+                            country_code: c.country_code,
+                            iso_2: c.iso_2,
+                            currency_code: c.currency_code,
+                        },
+                    },
                     upsert: true,
                 },
             })),
