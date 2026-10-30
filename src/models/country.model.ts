@@ -5,6 +5,7 @@ import { paginate } from './plugins/paginate.plugin.js';
 export interface ICountry extends Document {
   country_code: string;
   country_name: string;
+  iso_2?: string;
   currency_code: string;
   aliases: string[];
 }
@@ -20,6 +21,7 @@ const countrySchema = new Schema<ICountry, ICountryModel>(
   {
     country_code: { type: String, required: true, trim: true, index: true },
     country_name: { type: String, required: true, trim: true, index: true },
+    iso_2: { type: String, trim: true, uppercase: true, index: true },
     currency_code: { type: String, required: true, trim: true },
     aliases: { type: [String], default: [] },
   },
