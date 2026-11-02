@@ -861,6 +861,26 @@ describe('support flow — customer + staff', () => {
       expect(res.body.data.ticket.assigned_to?.id).toBe(String(superAdmin._id));
     });
 
+    it('assignment event shows the assignee name, never a raw ObjectId', async () => {
+      await request(app)
+        .patch(`/api/support/tickets/${ticketId}`)
+        .set(bearer(superToken))
+        .send({ assigned_to: String(superAdmin._id) });
+
+      const res = await request(app)
+        .get(`/api/support/tickets/${ticketId}/messages`)
+        .set(bearer(superToken));
+
+      expect(res.status).toBe(200);
+      const event = res.body.data.results.find(
+        (m: any) => m.kind === 'event' && m.event?.type === 'assigned',
+      );
+      expect(event).toBeDefined();
+      expect(event.event.from).toBeNull();
+      expect(event.event.to).toBe('Super Admin');
+      expect(JSON.stringify(event.event)).not.toMatch(/[0-9a-f]{24}/i);
+    });
+
     it('super admin can change priority', async () => {
       const res = await request(app)
         .patch(`/api/support/tickets/${ticketId}`)

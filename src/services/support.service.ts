@@ -248,7 +248,11 @@ const buildRelations = async (
     if (ticket.organization_id) orgIds.add(String(ticket.organization_id));
   }
   for (const id of extraUserIds) {
-    if (id) userIds.add(String(id));
+    // Only real ObjectIds belong in the lookup; event from/to may already be
+    // display names for newly written assignment events.
+    if (id && /^[0-9a-f]{24}$/i.test(String(id))) {
+      userIds.add(String(id));
+    }
   }
 
   const [users, orgs] = await Promise.all([
@@ -409,6 +413,24 @@ const serializeMessage = (
     is_internal: Boolean(message.is_internal),
     created_at: message.created_at,
   };
+
+  // Legacy assignment events stored raw ObjectIds; resolve them to names so the
+  // activity chip never shows a 24-char Mongo id. New events store names
+  // directly and pass through unchanged.
+  if (message.event?.type === 'assigned') {
+    const resolveAssignee = (value: any): string | null => {
+      if (!value) return null;
+      const raw = String(value);
+      if (!/^[0-9a-f]{24}$/i.test(raw)) return raw;
+      return userMap?.get(raw) ?? 'Unknown staff';
+    };
+    out.event = {
+      ...message.event,
+      from: resolveAssignee(message.event.from),
+      to: resolveAssignee(message.event.to),
+    };
+  }
+
   out.sender_role = message.sender_role;
   out.sender_id = message.sender_id ? String(message.sender_id) : null;
   if (viewerId) {
@@ -523,20 +545,26 @@ const computeUnreadCounts = async (
   if (!ticketIds.length) return new Map();
 
   const tickets = await SupportTicket.find({ _id: { $in: ticketIds } })
-    .select('last_read_at')
+    .select('last_read_at staff_read_at customer_read_at created_at')
     .lean();
 
   const cursorByTicket = new Map<string, Date>();
   for (const t of tickets) {
-    cursorByTicket.set(
-      String(t._id),
-      readAtFor(t, currentUserId) ?? new Date(0),
-    );
+    // Role-level cursor fallback:
+    // If viewer has no per-user last_read_at map entry,
+    // fall back to the role-level cursor (staff_read_at / customer_read_at).
+    // If neither exists, start from ticket creation time so that tickets
+    // nobody has opened do not inflate the unread count to everything ever sent.
+    const cursor =
+      readAtFor(t, currentUserId) ??
+      (staff ? t.staff_read_at : t.customer_read_at) ??
+      new Date(t.created_at);
+    cursorByTicket.set(String(t._id), cursor);
   }
 
   const clauses = ticketIds.map((id) => ({
     ticket_id: id,
-    created_at: { $gt: cursorByTicket.get(String(id)) ?? new Date(0) },
+    created_at: { $gt: cursorByTicket.get(String(id)) },
   }));
 
   const rows = await SupportMessage.aggregate<{
@@ -1009,7 +1037,11 @@ export const listMessages = async (
     [ticket],
     staff,
     viewerId,
-    page.map((m) => m.sender_id),
+    page.flatMap((m) => [
+      m.sender_id,
+      m.event?.type === 'assigned' ? m.event?.from : null,
+      m.event?.type === 'assigned' ? m.event?.to : null,
+    ]),
   );
   const ticketState = serializeTicket(
     ticket,
@@ -1377,6 +1409,8 @@ export const updateTicket = async (
   }
 
   let assignedUser: any = null;
+  let previousAssigneeName: string | null = null;
+  let nextAssigneeName: string | null = null;
   if (body.assigned_to !== undefined) {
     const nextAssignee = body.assigned_to ? String(body.assigned_to) : null;
     const current = ticket.assigned_to ? String(ticket.assigned_to) : null;
@@ -1393,6 +1427,15 @@ export const updateTicket = async (
             'Assignee must be an active super admin.',
           );
         }
+        nextAssigneeName = nameOf(assignedUser);
+      }
+      // Resolve the previous assignee's display name at write time so the
+      // activity chip never renders a raw Mongo _id.
+      if (current) {
+        const previousUser = await User.findOne({ _id: toObjectId(current) })
+          .select('first_name last_name')
+          .lean();
+        previousAssigneeName = previousUser ? nameOf(previousUser) : null;
       }
       updates.assigned_to = nextAssignee ? toObjectId(nextAssignee) : null;
     }
@@ -1427,8 +1470,8 @@ export const updateTicket = async (
     await writeEvent(
       ticket,
       'assigned',
-      ticket.assigned_to ? String(ticket.assigned_to) : null,
-      updates.assigned_to ? String(updates.assigned_to) : null,
+      previousAssigneeName,
+      nextAssigneeName,
       true,
       reqUser._id,
     );
