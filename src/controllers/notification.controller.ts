@@ -8,7 +8,10 @@ import { createResponse } from '../services/common.service.js';
 export const listNotifications = catchAsync(
   async (req: Request, res: Response) => {
     // Auth middleware thi user_id leve che
-    const filter = { user_id: (req.user as any)._id };
+    const filter: Record<string, any> = { user_id: (req.user as any)._id };
+    if (String(req.query.unread_only) === 'true') {
+      filter.is_read = false;
+    }
     const options = pick(req.query, ['page', 'limit', 'sortBy']);
 
     const result = await notificationService.listNotifications(filter, options);

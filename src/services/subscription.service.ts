@@ -36,6 +36,9 @@ import {
 } from './subscription-email.service.js';
 import { invalidateDashboardCache } from './admin/dashboard.cache.js';
 import { systemLog } from '../utils/system-log.js';
+import { User } from '../models/user.model.js';
+import * as notificationService from './notification.service.js';
+import { logger } from '../config/logger.js';
 
 const activeSubQuery = (organizationId: string) => ({
   organization_id: toObjectId(organizationId),
@@ -252,6 +255,43 @@ const decideInitialStatus = async (
 };
 
 /**
+ * In-app notification for a freshly granted plan. Only active organization
+ * admins are notified; the write is idempotent thanks to `dedupe_key`.
+ */
+const notifyPlanAssigned = async (
+  organizationId: string,
+  planName: string,
+  sub: ISubscription,
+): Promise<void> => {
+  const admins = await User.find({
+    role: 'ORGANIZATION_ADMIN',
+    organization_id: toObjectId(organizationId),
+    status: 1,
+  })
+    .select('_id')
+    .lean();
+
+  if (!admins.length) return;
+
+  const activated = sub.status === 'active';
+  console.log(
+    `🔔 Creating app-notification for plan ${planName} → org ${organizationId} (${admins.length} admin(s))`,
+  );
+
+  await notificationService.createForUsers({
+    user_ids: admins.map((admin: any) => String(admin._id)),
+    type: 'subscription',
+    severity: 'info',
+    title: activated ? 'Plan activated' : 'Plan scheduled',
+    message: activated
+      ? `${planName} has been activated for your organization.`
+      : `${planName} has been scheduled for your organization.`,
+    action_url: '/subscription',
+    dedupe_key: `subscription:${String(sub._id)}:assigned`,
+  });
+};
+
+/**
  * Single, shared grant entry point (§3). Every caller (admin assign-plan,
  * Stripe/Razorpay success, renew-recreate, force-activate) routes through it.
  */
@@ -337,6 +377,17 @@ export const grantSubscription = async (
     data: sub.toObject(),
     organizationId: sub.organization_id,
   });
+
+  // Notify the organization's admins in-app. This is a direct write so the row
+  // exists immediately, independent of the queue worker.
+  await notifyPlanAssigned(organizationId, plan.name, sub).catch(
+    (err: Error) => {
+      logger.error(
+        `[NOTIFICATION] plan-assigned notification failed for org ${organizationId}: ${err.message}`,
+      );
+    },
+  );
+
   return sub;
 };
 
