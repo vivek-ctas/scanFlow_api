@@ -425,7 +425,7 @@ const serializeMessage = (
       return userMap?.get(raw) ?? 'Unknown staff';
     };
     out.event = {
-      ...message.event,
+      type: message.event.type,
       from: resolveAssignee(message.event.from),
       to: resolveAssignee(message.event.to),
     };
