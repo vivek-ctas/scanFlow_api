@@ -1161,7 +1161,7 @@ export const listTicketAttachments = async (
   };
   if (!staff) base.is_internal = false;
 
-  const [messages, total] = await Promise.all([
+  const [messages, attachmentCount] = await Promise.all([
     SupportMessage.find(base)
       .select('_id attachments sender_id sender_role created_at')
       .sort({ created_at: -1, _id: -1 })
@@ -1169,8 +1169,14 @@ export const listTicketAttachments = async (
       .limit(limit)
       .maxTimeMS(5000)
       .lean(),
-    SupportMessage.countDocuments(base),
+    SupportMessage.aggregate([
+      { $match: base },
+      { $project: { count: { $size: { $ifNull: ['$attachments', []] } } } },
+      { $group: { _id: null, total: { $sum: '$count' } } },
+    ]),
   ]);
+
+  const total = Number(attachmentCount?.[0]?.total ?? 0);
 
   const relations = await buildRelations(
     [ticket],

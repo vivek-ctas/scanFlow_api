@@ -195,7 +195,7 @@ export const mediaAttachment = catchAsync(
       messageId,
       index,
     );
-    await sendAttachment(res, attachment);
+    await sendAttachment(res, attachment, req.query.download === '1');
   },
 );
 
