@@ -7,7 +7,12 @@ export type SupportSenderRole = 'SUPER_ADMIN' | 'ORGANIZATION_ADMIN' | 'system';
 export type SupportMessageKind = 'reply' | 'note' | 'event';
 
 export type SupportEventType =
-  'status_changed' | 'priority_changed' | 'assigned' | 'reopened' | 'closed';
+  | 'status_changed'
+  | 'priority_changed'
+  | 'assigned'
+  | 'reopened'
+  | 'closed'
+  | 'attachment_removed';
 
 export interface ISupportEvent {
   type: SupportEventType;
@@ -20,6 +25,8 @@ export interface ISupportAttachment {
   file_name: string;
   content_type: string;
   size_bytes: number;
+  kind?: string | null;
+  removed_at?: Date | null;
 }
 
 export interface ISupportMessage extends Document {
@@ -54,6 +61,7 @@ const supportEventSchema = new Schema<ISupportEvent>(
         'assigned',
         'reopened',
         'closed',
+        'attachment_removed',
       ],
       required: true,
     },
@@ -69,6 +77,8 @@ const supportAttachmentSchema = new Schema<ISupportAttachment>(
     file_name: { type: String, required: true, trim: true },
     content_type: { type: String, required: true, trim: true },
     size_bytes: { type: Number, required: true },
+    kind: { type: String, default: null },
+    removed_at: { type: Date, default: null },
   },
   { _id: false },
 );
