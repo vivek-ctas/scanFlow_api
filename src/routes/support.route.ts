@@ -14,7 +14,20 @@ import * as supportFaqValidation from '../validations/support-faq.validations.js
 
 const router = Router();
 
+// Signed media route — authenticates with a short-lived token instead of the
+// Authorization header (needed by <img>/<video> and large downloads).
+router.get(
+  '/media/:ticketId/:messageId/:index',
+  supportController.mediaAttachment,
+);
+
 router.use(auth());
+
+router.get(
+  '/attachment-config',
+  auth('viewSupport'),
+  supportController.getAttachmentConfigHandler,
+);
 
 // Shared routes — both SUPER_ADMIN and ORGANIZATION_ADMIN hold `viewSupport`.
 // `/tickets/summary` MUST be declared before `/tickets/:ticketId`.
@@ -46,6 +59,25 @@ router.get(
   auth('viewSupport'),
   validate(supportValidation.downloadAttachment),
   supportController.downloadAttachment,
+);
+
+router.get(
+  '/tickets/:ticketId/messages/:messageId/attachments/:index/access',
+  auth('viewSupport'),
+  supportController.getAttachmentAccess,
+);
+
+router.delete(
+  '/tickets/:ticketId/messages/:messageId/attachments/:index',
+  auth('manageSupport'),
+  supportController.removeAttachment,
+);
+
+router.get(
+  '/tickets/:ticketId/attachments',
+  auth('viewSupport'),
+  supportReadLimiter,
+  supportController.listTicketAttachments,
 );
 
 router.get(

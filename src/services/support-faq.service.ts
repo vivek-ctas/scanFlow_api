@@ -31,7 +31,10 @@ export const listFaqs = async (user: any) => {
     .limit(500)
     .lean();
   return createResponse(httpStatus.OK, 'FAQs fetched successfully.', {
-    results: faqs,
+    results: faqs.map((f: any) => ({
+      ...f,
+      id: String(f._id),
+    })),
   });
 };
 

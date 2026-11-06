@@ -110,7 +110,44 @@ const envVarsSchema = Joi.object()
       .description('days after which a resolved ticket is auto-closed'),
     SUPPORT_MAX_ATTACHMENT_MB: Joi.number()
       .default(5)
-      .description('max size of a single support attachment in MB'),
+      .description(
+        'deprecated: max size of a single support attachment in MB (fallback only)',
+      ),
+    SUPPORT_MAX_FILES: Joi.number()
+      .default(5)
+      .description('max attachments per support message'),
+    SUPPORT_MAX_TOTAL_MB: Joi.number()
+      .default(100)
+      .description('max total attachment bytes per support message in MB'),
+    SUPPORT_MAX_IMAGE_MB: Joi.number().default(10),
+    SUPPORT_MAX_DOCUMENT_MB: Joi.number().default(25),
+    SUPPORT_MAX_TEXT_MB: Joi.number().default(10),
+    SUPPORT_MAX_ARCHIVE_MB: Joi.number().default(50),
+    SUPPORT_MAX_VIDEO_MB: Joi.number().default(100),
+    SUPPORT_TICKET_STORAGE_MB: Joi.number()
+      .default(250)
+      .description('max attachment storage per support ticket in MB'),
+    SUPPORT_ORG_STORAGE_MB: Joi.number()
+      .default(1024)
+      .description('max attachment storage per organization in MB'),
+    SUPPORT_UPLOAD_MB_PER_HOUR: Joi.number()
+      .default(500)
+      .description('max attachment bytes a user may upload per hour'),
+    SUPPORT_MIN_FREE_DISK_MB: Joi.number()
+      .default(2048)
+      .description('refuse uploads when free disk falls below this'),
+    SUPPORT_UPLOAD_TMP_DIR: Joi.string()
+      .allow('')
+      .default('')
+      .description('temporary directory for in-flight support uploads'),
+    SUPPORT_ALLOWED_KINDS: Joi.string()
+      .default('image,document,text,video,archive')
+      .description('comma-separated attachment kinds that are enabled'),
+    SUPPORT_MEDIA_TOKEN_SECRET: Joi.string()
+      .allow('')
+      .default('')
+      .description('HMAC secret for short-lived attachment access URLs'),
+    SUPPORT_MEDIA_TOKEN_TTL_SECONDS: Joi.number().default(120),
     SUPPORT_STORAGE_DRIVER: Joi.string()
       .valid('local', 's3')
       .default('local')
@@ -242,6 +279,21 @@ export const config = {
     firstResponseHours: envVars.SUPPORT_FIRST_RESPONSE_HOURS,
     autocloseDays: envVars.SUPPORT_AUTOCLOSE_DAYS,
     maxAttachmentMb: envVars.SUPPORT_MAX_ATTACHMENT_MB,
+    maxFiles: envVars.SUPPORT_MAX_FILES,
+    maxTotalMb: envVars.SUPPORT_MAX_TOTAL_MB,
+    maxImageMb: envVars.SUPPORT_MAX_IMAGE_MB,
+    maxDocumentMb: envVars.SUPPORT_MAX_DOCUMENT_MB,
+    maxTextMb: envVars.SUPPORT_MAX_TEXT_MB,
+    maxArchiveMb: envVars.SUPPORT_MAX_ARCHIVE_MB,
+    maxVideoMb: envVars.SUPPORT_MAX_VIDEO_MB,
+    ticketStorageMb: envVars.SUPPORT_TICKET_STORAGE_MB,
+    orgStorageMb: envVars.SUPPORT_ORG_STORAGE_MB,
+    uploadMbPerHour: envVars.SUPPORT_UPLOAD_MB_PER_HOUR,
+    minFreeDiskMb: envVars.SUPPORT_MIN_FREE_DISK_MB,
+    uploadTmpDir: envVars.SUPPORT_UPLOAD_TMP_DIR,
+    allowedKinds: envVars.SUPPORT_ALLOWED_KINDS,
+    mediaTokenSecret: envVars.SUPPORT_MEDIA_TOKEN_SECRET,
+    mediaTokenTtlSeconds: envVars.SUPPORT_MEDIA_TOKEN_TTL_SECONDS,
     storageDriver: envVars.SUPPORT_STORAGE_DRIVER as 'local' | 's3',
     uploadDir: envVars.SUPPORT_UPLOAD_DIR,
     rateCreatePerHour: envVars.SUPPORT_RATE_CREATE_PER_HOUR,

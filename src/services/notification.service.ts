@@ -16,11 +16,23 @@ export interface CreateForUsersInput {
   message?: string;
   action_url?: string;
   dedupe_key?: string;
+  organization_id?: string;
 }
 
 export const createForUsers = async (inputs: CreateForUsersInput) => {
-  const { user_ids, type, severity, title, message, action_url, dedupe_key } =
-    inputs;
+  const {
+    user_ids,
+    type,
+    severity,
+    title,
+    message,
+    action_url,
+    dedupe_key,
+    organization_id,
+  } = inputs;
+  const orgId = organization_id
+    ? new mongoose.Types.ObjectId(organization_id)
+    : undefined;
   if (!Array.isArray(user_ids) || user_ids.length === 0) return [];
 
   const created: any[] = [];
@@ -42,13 +54,21 @@ export const createForUsers = async (inputs: CreateForUsersInput) => {
             message: message || existing.message,
             title: title || existing.title,
             action_url: action_url || existing.action_url,
+            ...(orgId ? { organization_id: orgId } : {}),
             expires_at: new Date(Date.now() + 90 * 86400000),
           },
         );
-        created.push({ ...existing, message, title, action_url });
+        created.push({
+          ...existing,
+          message,
+          title,
+          action_url,
+          ...(orgId ? { organization_id: orgId } : {}),
+        });
       } else {
         const notification = await Notification.create({
           user_id: userId,
+          ...(orgId ? { organization_id: orgId } : {}),
           type,
           severity: severity || 'info',
           title: title || 'Notification',

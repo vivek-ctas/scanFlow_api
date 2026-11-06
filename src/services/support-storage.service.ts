@@ -1,133 +1,46 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import httpStatus from 'http-status';
 import config from '../config/config.js';
 import { ApiError } from '../utils/ApiError.js';
+import { SupportMessage } from '../models/index.js';
 import type { ISupportAttachment } from '../models/support-message.model.js';
+import {
+  ATTACHMENT_REGISTRY,
+  DEFAULT_CONFIG,
+  EXTENSION_MAP,
+  MIME_BY_EXTENSION_MAP,
+  extensionOf,
+  isPreviewable,
+  validateAttachment,
+  type AttachmentKind,
+  type AttachmentValidationResult,
+} from './support-attachment-types.js';
 
-export const SUPPORT_ALLOWED_MIME = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'image/gif',
-  'application/pdf',
-  'text/plain',
-  'text/csv',
-  'text/x-log',
-]);
+const MB = 1024 * 1024;
 
-export const MAX_ATTACHMENTS_PER_MESSAGE = 3;
+const supportConfig = () =>
+  (config as any).support ?? ({} as Record<string, any>);
 
-const rootDir = () => path.resolve(config.support.uploadDir);
+export const SUPPORT_ALLOWED_MIME: ReadonlySet<string> = new Set(
+  Object.values(MIME_BY_EXTENSION_MAP),
+);
 
-const sanitizeName = (name: string) =>
-  path
-    .basename(name)
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .slice(0, 120) || 'file';
+export const MAX_ATTACHMENTS_PER_MESSAGE: number =
+  Number(supportConfig().maxFiles) || DEFAULT_CONFIG.maxFiles;
 
-type DetectedKind =
-  'png' | 'jpeg' | 'webp' | 'gif' | 'pdf' | 'text' | 'unknown';
+export const SUPPORT_MAX_TOTAL_BYTES: number =
+  (Number(supportConfig().maxTotalMb) || DEFAULT_CONFIG.maxTotalMB) * MB;
 
-const PNG_SIGNATURE = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
+export const SUPPORT_MAX_VIDEO_BYTES: number =
+  (Number(supportConfig().maxVideoMb) || DEFAULT_CONFIG.maxVideoMB) * MB;
 
-/** Sniffs the buffer itself; the declared MIME type is never trusted alone. */
-const detectKind = (buffer: Buffer): DetectedKind => {
-  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_SIGNATURE))
-    return 'png';
-  if (
-    buffer.length >= 3 &&
-    buffer[0] === 0xff &&
-    buffer[1] === 0xd8 &&
-    buffer[2] === 0xff
-  )
-    return 'jpeg';
-  if (buffer.length >= 6) {
-    const header = buffer.subarray(0, 6).toString('ascii');
-    if (header === 'GIF87a' || header === 'GIF89a') return 'gif';
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
-    buffer.subarray(8, 12).toString('ascii') === 'WEBP'
-  ) {
-    return 'webp';
-  }
-  if (buffer.length >= 5 && buffer.subarray(0, 5).toString('ascii') === '%PDF-')
-    return 'pdf';
+const rootDir = () =>
+  path.resolve(supportConfig().uploadDir || '/tmp/support-uploads');
 
-  // Text has no signature: accept valid UTF-8 without NUL or most control
-  // bytes. SVG/HTML are plain text too, but their MIME type is not allowed.
-  if (buffer.length && !buffer.includes(0)) {
-    try {
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
-      // eslint-disable-next-line no-control-regex
-      if (!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) return 'text';
-    } catch {
-      return 'unknown';
-    }
-  }
-
-  return 'unknown';
-};
-
-const KIND_TO_MIME: Record<
-  Exclude<DetectedKind, 'text' | 'unknown'>,
-  string
-> = {
-  png: 'image/png',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-  pdf: 'application/pdf',
-};
-
-const TEXT_MIME = new Set(['text/plain', 'text/csv', 'text/x-log']);
-
-const assertContentMatches = (file: Express.Multer.File) => {
-  if (!file.size) {
-    throw new ApiError(httpStatus.BAD_REQUEST, 'Attachment is empty.');
-  }
-
-  const kind = detectKind(file.buffer);
-
-  if (kind === 'unknown') {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      `Attachment content is not an allowed type: ${file.originalname}`,
-    );
-  }
-
-  if (kind === 'text') {
-    if (!TEXT_MIME.has(file.mimetype)) {
-      throw new ApiError(
-        httpStatus.BAD_REQUEST,
-        `Attachment content does not match its declared type: ${file.originalname}`,
-      );
-    }
-    return;
-  }
-
-  if (KIND_TO_MIME[kind] !== file.mimetype) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      `Attachment content does not match its declared type: ${file.originalname}`,
-    );
-  }
-};
-
-type StorageTarget = {
-  organizationId: string;
-  ticketId: string;
-};
-
-/**
- * Resolve a stored attachment to an absolute path on disk, guarding against
- * path traversal.
- */
+/** Resolve a stored attachment to an absolute path, guarding against traversal. */
 export const resolveAttachmentPath = (storageKey: string): string => {
   const absolute = path.resolve(rootDir(), storageKey);
   const normalizedRoot = rootDir() + path.sep;
@@ -137,23 +50,154 @@ export const resolveAttachmentPath = (storageKey: string): string => {
   return absolute;
 };
 
+const tempDir = () => {
+  const configured = String(supportConfig().uploadTmpDir || '').trim();
+  return path.resolve(
+    configured || path.join(os.tmpdir(), 'scanflow-support-tmp'),
+  );
+};
+
+export const ensureTempDir = async (): Promise<string> => {
+  const dir = tempDir();
+  await fs.promises.mkdir(dir, { recursive: true });
+  return dir;
+};
+
+/** Deletes multer temp files after a failed or completed upload. */
+export const deleteTempFiles = async (
+  files: Express.Multer.File[] = [],
+): Promise<void> => {
+  await Promise.allSettled(
+    files
+      .map((file) => (file as any).path)
+      .filter(Boolean)
+      .map((filePath: string) => fs.promises.unlink(filePath)),
+  );
+};
+
 /** Best-effort cleanup used when a DB write fails after files were stored. */
 export const deleteStoredFiles = async (
   attachments: ISupportAttachment[] = [],
 ): Promise<void> => {
   await Promise.allSettled(
-    attachments.map((attachment) =>
-      fs.promises.unlink(resolveAttachmentPath(attachment.storage_key)),
-    ),
+    attachments
+      .filter((attachment) => Boolean(attachment.storage_key))
+      .map((attachment) =>
+        fs.promises.unlink(resolveAttachmentPath(attachment.storage_key)),
+      ),
   );
 };
 
+const readFileBuffer = async (file: Express.Multer.File): Promise<Buffer> => {
+  if (file.buffer?.length) return file.buffer;
+  const filePath = (file as any).path as string | undefined;
+  if (!filePath) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Attachment could not be read: ${file.originalname}`,
+    );
+  }
+
+  // ZIP/OOXML/text validation needs the whole file; magic-byte checks only
+  // need the header. Reading in this targeted way keeps large videos cheap.
+  const ext = extensionOf(file.originalname);
+  const entry = EXTENSION_MAP[ext];
+  const wholeFile =
+    !entry ||
+    entry.kind === 'text' ||
+    entry.kind === 'archive' ||
+    (entry.kind === 'document' && ext !== 'pdf');
+
+  if (wholeFile) return fs.promises.readFile(filePath);
+
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(Math.min(64 * 1024, file.size ?? 64 * 1024));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+};
+
+const assertFreeDisk = async (incomingBytes: number): Promise<void> => {
+  const minFreeMb =
+    Number(supportConfig().minFreeDiskMb) || DEFAULT_CONFIG.minFreeDiskMB;
+  if (!minFreeMb) return;
+  try {
+    const stats = await fs.promises.statfs(rootDir());
+    const available = Number(stats.bavail) * Number(stats.bsize);
+    if (available - incomingBytes < minFreeMb * MB) {
+      throw new ApiError(
+        httpStatus.INSUFFICIENT_STORAGE,
+        'Support file storage is full. Please try again later or attach a smaller file.',
+      );
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    // statfs is unavailable on some platforms; do not block uploads for that.
+  }
+};
+
+const sumAttachmentBytes = async (
+  filter: Record<string, unknown>,
+): Promise<number> => {
+  const rows = await SupportMessage.aggregate([
+    { $match: filter },
+    { $unwind: '$attachments' },
+    { $group: { _id: null, total: { $sum: '$attachments.size_bytes' } } },
+  ]);
+  return Number(rows?.[0]?.total ?? 0);
+};
+
+const assertStorageCaps = async (
+  target: { organizationId: string; ticketId: string },
+  incomingBytes: number,
+): Promise<void> => {
+  const ticketCapMb =
+    Number(supportConfig().ticketStorageMb) ||
+    DEFAULT_CONFIG.maxTicketStorageMB;
+  const orgCapMb =
+    Number(supportConfig().orgStorageMb) || DEFAULT_CONFIG.maxOrgStorageMB;
+
+  const [ticketBytes, orgBytes] = await Promise.all([
+    sumAttachmentBytes({ ticket_id: target.ticketId }),
+    sumAttachmentBytes({ organization_id: target.organizationId }),
+  ]);
+
+  if (ticketBytes + incomingBytes > ticketCapMb * MB) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `This ticket has reached its ${ticketCapMb} MB attachment limit.`,
+    );
+  }
+  if (orgBytes + incomingBytes > orgCapMb * MB) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      `Your organization has reached its ${orgCapMb} MB attachment limit.`,
+    );
+  }
+};
+
+const moveFile = async (source: string, destination: string): Promise<void> => {
+  try {
+    await fs.promises.rename(source, destination);
+  } catch (error: any) {
+    if (error?.code !== 'EXDEV') throw error;
+    await fs.promises.copyFile(source, destination);
+    await fs.promises.unlink(source);
+  }
+};
+
+type StorageTarget = {
+  organizationId: string;
+  ticketId: string;
+};
+
 /**
- * Persist uploaded files to the configured driver and return attachment
- * subdocuments. Local disk only for now; `s3` is a future driver.
- *
- * Keys are generated server-side as `<organization_id>/<ticket_id>/<uuid>`;
- * the original name is kept only as sanitised display metadata.
+ * Validate and persist uploaded files. Files are validated by detected content
+ * and extension (never by the declared MIME type), then moved from the temp
+ * directory to `<organization>/<ticket>/<uuid>.<detected-extension>`.
  */
 export const saveAttachments = async (
   files: Express.Multer.File[] = [],
@@ -161,80 +205,115 @@ export const saveAttachments = async (
 ): Promise<ISupportAttachment[]> => {
   if (!files.length) return [];
 
-  if (files.length > MAX_ATTACHMENTS_PER_MESSAGE) {
-    throw new ApiError(
-      httpStatus.BAD_REQUEST,
-      `At most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`,
-    );
-  }
+  const allowedKinds = String(supportConfig().allowedKinds || '')
+    .split(',')
+    .map((kind) => kind.trim())
+    .filter(Boolean) as AttachmentKind[];
+  const enabledKinds = allowedKinds.length
+    ? allowedKinds
+    : DEFAULT_CONFIG.allowedKinds;
 
-  if (config.support.storageDriver !== 'local') {
-    throw new ApiError(
-      httpStatus.NOT_IMPLEMENTED,
-      `Support storage driver "${config.support.storageDriver}" is not available.`,
-    );
-  }
-
-  if (!target?.organizationId || !target?.ticketId) {
-    throw new ApiError(
-      httpStatus.INTERNAL_SERVER_ERROR,
-      'Attachment storage target is missing.',
-    );
-  }
-
-  const maxBytes = config.support.maxAttachmentMb * 1024 * 1024;
-  for (const file of files) {
-    if (!SUPPORT_ALLOWED_MIME.has(file.mimetype)) {
+  try {
+    if (files.length > MAX_ATTACHMENTS_PER_MESSAGE) {
       throw new ApiError(
         httpStatus.BAD_REQUEST,
-        `Unsupported attachment type: ${file.mimetype}`,
+        `At most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`,
       );
     }
-    if (file.size > maxBytes) {
+
+    if (
+      supportConfig().storageDriver &&
+      supportConfig().storageDriver !== 'local'
+    ) {
       throw new ApiError(
-        413,
-        `Attachment exceeds the ${config.support.maxAttachmentMb}MB limit.`,
+        httpStatus.NOT_IMPLEMENTED,
+        `Support storage driver "${supportConfig().storageDriver}" is not available.`,
       );
     }
-    assertContentMatches(file);
-  }
 
-  const dir = path.join(
-    rootDir(),
-    sanitizeName(target.organizationId),
-    sanitizeName(target.ticketId),
-  );
+    if (!target?.organizationId || !target?.ticketId) {
+      throw new ApiError(
+        httpStatus.INTERNAL_SERVER_ERROR,
+        'Attachment storage target is missing.',
+      );
+    }
 
-  await fs.promises.mkdir(dir, { recursive: true });
+    const totalBytes = files.reduce(
+      (sum, file) => sum + Number(file.size ?? 0),
+      0,
+    );
+    if (totalBytes > SUPPORT_MAX_TOTAL_BYTES) {
+      throw new ApiError(
+        httpStatus.BAD_REQUEST,
+        `Attachments exceed the ${Math.round(
+          SUPPORT_MAX_TOTAL_BYTES / MB,
+        )} MB total limit for one message.`,
+      );
+    }
 
-  const attachments: ISupportAttachment[] = [];
-  try {
+    const validated: Array<{
+      file: Express.Multer.File;
+      result: AttachmentValidationResult;
+    }> = [];
+
     for (const file of files) {
+      const buffer = await readFileBuffer(file);
+      const result = validateAttachment(
+        {
+          buffer,
+          originalname: file.originalname,
+          size: Number(file.size ?? buffer.length),
+          declaredMime: file.mimetype,
+        },
+        enabledKinds,
+      );
+      validated.push({ file, result });
+    }
+
+    await assertFreeDisk(totalBytes);
+    await assertStorageCaps(target, totalBytes);
+
+    const dir = path.join(
+      rootDir(),
+      path.basename(target.organizationId),
+      path.basename(target.ticketId),
+    );
+    await fs.promises.mkdir(dir, { recursive: true });
+
+    const attachments: ISupportAttachment[] = [];
+    for (const { file, result } of validated) {
       const key = [
-        sanitizeName(target.organizationId),
-        sanitizeName(target.ticketId),
-        crypto.randomUUID(),
+        path.basename(target.organizationId),
+        path.basename(target.ticketId),
+        `${crypto.randomUUID()}.${result.extension}`,
       ].join('/');
       const absolute = path.join(rootDir(), key);
 
-      await fs.promises.writeFile(absolute, file.buffer);
+      if ((file as any).path) {
+        await moveFile((file as any).path, absolute);
+      } else {
+        await fs.promises.writeFile(absolute, file.buffer);
+      }
 
       attachments.push({
         storage_key: key,
-        file_name: sanitizeName(file.originalname),
-        content_type: file.mimetype,
-        size_bytes: file.size,
+        file_name: result.fileName,
+        content_type: result.contentType,
+        size_bytes: result.sizeBytes,
+        kind: result.kind,
       });
     }
+
+    return attachments;
   } catch (error) {
-    await deleteStoredFiles(attachments);
+    await deleteTempFiles(files);
     throw error;
   }
-
-  return attachments;
 };
 
-export const attachmentExists = async (storageKey: string) => {
+export const attachmentExists = async (
+  storageKey: string,
+): Promise<boolean> => {
   try {
     await fs.promises.access(
       resolveAttachmentPath(storageKey),
@@ -245,3 +324,82 @@ export const attachmentExists = async (storageKey: string) => {
     return false;
   }
 };
+
+/** True when the attachment kind may be rendered inline by the browser. */
+export const canPreviewAttachment = (
+  kind: AttachmentKind | null | undefined,
+  contentType?: string,
+  fileName?: string,
+): boolean => {
+  if (kind) return isPreviewable(kind);
+  const ext = fileName ? extensionOf(fileName) : '';
+  const entry = EXTENSION_MAP[ext];
+  if (entry) return entry.previewable;
+  return Boolean(
+    contentType?.startsWith('image/') || contentType?.startsWith('video/'),
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Short-lived attachment access tokens                                */
+/* ------------------------------------------------------------------ */
+
+const tokenSecret = (): string =>
+  String(
+    supportConfig().mediaTokenSecret ||
+      (config as any).jwt?.secret ||
+      'scanflow-support-media-token',
+  );
+
+const tokenTtlSeconds = (): number =>
+  Number(supportConfig().mediaTokenTtlSeconds) ||
+  DEFAULT_CONFIG.tokenTTLSeconds;
+
+const sign = (payload: string): string =>
+  crypto.createHmac('sha256', tokenSecret()).update(payload).digest('hex');
+
+interface TokenInput {
+  userId: string;
+  ticketId: string;
+  messageId: string;
+  index: number;
+}
+
+export const createAttachmentToken = (
+  input: TokenInput,
+): { token: string; expires_at: Date } => {
+  const expires = Math.floor(Date.now() / 1000) + tokenTtlSeconds();
+  const payload = [
+    expires,
+    input.userId,
+    input.ticketId,
+    input.messageId,
+    input.index,
+  ].join('.');
+  return {
+    token: `${expires}.${input.userId}.${sign(payload)}`,
+    expires_at: new Date(expires * 1000),
+  };
+};
+
+export const verifyAttachmentToken = (
+  token: string,
+  input: Omit<TokenInput, 'userId'>,
+): boolean => {
+  const parts = String(token ?? '').split('.');
+  if (parts.length !== 3) return false;
+  const [expiresRaw, userId, signature] = parts;
+  const expires = Number(expiresRaw);
+  if (!expires || !userId || !signature) return false;
+  if (expires < Math.floor(Date.now() / 1000)) return false;
+
+  const expected = sign(
+    [expires, userId, input.ticketId, input.messageId, input.index].join('.'),
+  );
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+/** Kinds exposed to the serializer so the panel can render the right card. */
+export const ATTACHMENT_KINDS = ATTACHMENT_REGISTRY.map((entry) => entry.kind);

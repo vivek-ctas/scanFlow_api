@@ -33,7 +33,14 @@ import { enqueueSupportNotification } from '../queues/support.queue.js';
 import {
   saveAttachments,
   deleteStoredFiles,
+  attachmentExists,
+  deleteTempFiles,
+  createAttachmentToken,
 } from './support-storage.service.js';
+import {
+  isPreviewable,
+  kindForAttachment,
+} from './support-attachment-types.js';
 
 const MAX_SMART_CONTEXT_BYTES = 8192;
 
@@ -248,7 +255,11 @@ const buildRelations = async (
     if (ticket.organization_id) orgIds.add(String(ticket.organization_id));
   }
   for (const id of extraUserIds) {
-    if (id) userIds.add(String(id));
+    // Only real ObjectIds belong in the lookup; event from/to may already be
+    // display names for newly written assignment events.
+    if (id && /^[0-9a-f]{24}$/i.test(String(id))) {
+      userIds.add(String(id));
+    }
   }
 
   const [users, orgs] = await Promise.all([
@@ -326,7 +337,11 @@ const senderLabel = (
 const PREVIEW_MAX = 80;
 export const buildPreview = (
   body: unknown,
-  attachments: Array<{ file_name?: string; content_type?: string }> = [],
+  attachments: Array<{
+    file_name?: string;
+    content_type?: string;
+    kind?: string | null;
+  }> = [],
 ): string => {
   const text = typeof body === 'string' ? body.replace(/\s+/g, ' ').trim() : '';
   if (text) return text.slice(0, PREVIEW_MAX);
@@ -334,9 +349,11 @@ export const buildPreview = (
   if (attachments.length > 1) return `📎 ${attachments.length} attachments`;
   const attachment = attachments[0];
   if (!attachment) return '';
-  if (String(attachment.content_type ?? '').startsWith('image/')) {
-    return '📷 Photo';
-  }
+  const kind =
+    attachment.kind ??
+    kindForAttachment(attachment.content_type, attachment.file_name);
+  if (kind === 'image') return '📷 Photo';
+  if (kind === 'video') return '🎥 Video';
   return `📎 ${attachment.file_name ?? 'Attachment'}`;
 };
 
@@ -391,6 +408,23 @@ const serializeLastPublicMessage = (
   };
 };
 
+const serializeAttachments = (attachments: any[] = []) =>
+  (attachments ?? []).map((attachment: any) => {
+    const kind =
+      (attachment.kind as string | null) ??
+      kindForAttachment(attachment.content_type, attachment.file_name);
+    const removed = Boolean(attachment.removed_at);
+    return {
+      file_name: attachment.file_name,
+      content_type: attachment.content_type,
+      size_bytes: attachment.size_bytes,
+      kind: kind ?? null,
+      previewable: !removed && Boolean(kind) && isPreviewable(kind as any),
+      removed,
+      removed_at: attachment.removed_at ?? null,
+    };
+  });
+
 const serializeMessage = (
   message: any,
   staff: boolean,
@@ -405,10 +439,28 @@ const serializeMessage = (
     sender_name: label,
     body: message.body,
     event: message.event ?? null,
-    attachments: message.attachments ?? [],
+    attachments: serializeAttachments(message.attachments ?? []),
     is_internal: Boolean(message.is_internal),
     created_at: message.created_at,
   };
+
+  // Legacy assignment events stored raw ObjectIds; resolve them to names so the
+  // activity chip never shows a 24-char Mongo id. New events store names
+  // directly and pass through unchanged.
+  if (message.event?.type === 'assigned') {
+    const resolveAssignee = (value: any): string | null => {
+      if (!value) return null;
+      const raw = String(value);
+      if (!/^[0-9a-f]{24}$/i.test(raw)) return raw;
+      return userMap?.get(raw) ?? 'Unknown staff';
+    };
+    out.event = {
+      type: message.event.type,
+      from: resolveAssignee(message.event.from),
+      to: resolveAssignee(message.event.to),
+    };
+  }
+
   out.sender_role = message.sender_role;
   out.sender_id = message.sender_id ? String(message.sender_id) : null;
   if (viewerId) {
@@ -523,20 +575,26 @@ const computeUnreadCounts = async (
   if (!ticketIds.length) return new Map();
 
   const tickets = await SupportTicket.find({ _id: { $in: ticketIds } })
-    .select('last_read_at')
+    .select('last_read_at staff_read_at customer_read_at created_at')
     .lean();
 
   const cursorByTicket = new Map<string, Date>();
   for (const t of tickets) {
-    cursorByTicket.set(
-      String(t._id),
-      readAtFor(t, currentUserId) ?? new Date(0),
-    );
+    // Role-level cursor fallback:
+    // If viewer has no per-user last_read_at map entry,
+    // fall back to the role-level cursor (staff_read_at / customer_read_at).
+    // If neither exists, start from ticket creation time so that tickets
+    // nobody has opened do not inflate the unread count to everything ever sent.
+    const cursor =
+      readAtFor(t, currentUserId) ??
+      (staff ? t.staff_read_at : t.customer_read_at) ??
+      new Date(t.created_at);
+    cursorByTicket.set(String(t._id), cursor);
   }
 
   const clauses = ticketIds.map((id) => ({
     ticket_id: id,
-    created_at: { $gt: cursorByTicket.get(String(id)) ?? new Date(0) },
+    created_at: { $gt: cursorByTicket.get(String(id)) },
   }));
 
   const rows = await SupportMessage.aggregate<{
@@ -592,6 +650,11 @@ export const getAttachment = async (
   });
   if (!message) throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
 
+  // Internal notes (and their files) are never visible to customers.
+  if (message.is_internal && !isStaff(reqUser)) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Message not found');
+  }
+
   if (
     !Number.isInteger(index) ||
     index < 0 ||
@@ -599,7 +662,36 @@ export const getAttachment = async (
   ) {
     throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
   }
-  return message.attachments[index] as ISupportAttachment;
+
+  const attachment = message.attachments[index] as ISupportAttachment;
+  if (attachment.removed_at) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
+  }
+  return attachment;
+};
+
+/** Issue a short-lived URL the browser can use without an Authorization header. */
+export const getAttachmentAccess = async (
+  reqUser: any,
+  ticketId: string,
+  messageId: string,
+  index: number,
+) => {
+  await getAttachment(reqUser, ticketId, messageId, index);
+  const { token, expires_at } = createAttachmentToken({
+    userId: String(reqUser._id),
+    ticketId,
+    messageId,
+    index,
+  });
+
+  return createResponse(httpStatus.OK, 'Attachment access granted.', {
+    url: `/api/support/media/${ticketId}/${messageId}/${index}?token=${encodeURIComponent(
+      token,
+    )}`,
+    token,
+    expires_at,
+  });
 };
 
 const writeEvent = async (
@@ -1009,7 +1101,11 @@ export const listMessages = async (
     [ticket],
     staff,
     viewerId,
-    page.map((m) => m.sender_id),
+    page.flatMap((m) => [
+      m.sender_id,
+      m.event?.type === 'assigned' ? m.event?.from : null,
+      m.event?.type === 'assigned' ? m.event?.to : null,
+    ]),
   );
   const ticketState = serializeTicket(
     ticket,
@@ -1041,11 +1137,172 @@ export const listMessages = async (
   );
 };
 
+/** Flat list of every attachment in a ticket, for the "Files" panel. */
+export const listTicketAttachments = async (
+  reqUser: any,
+  ticketId: string,
+  params: { page?: number; limit?: number },
+) => {
+  const staff = isStaff(reqUser);
+  const orgScope = resolveOrganizationScope(reqUser, undefined);
+
+  const ticketQuery: Record<string, any> = { _id: toObjectId(ticketId) };
+  if (orgScope) ticketQuery.organization_id = orgScope;
+  const ticket = await SupportTicket.findOne(ticketQuery).lean();
+  if (!ticket) throw new ApiError(httpStatus.NOT_FOUND, 'Ticket not found');
+
+  const limit = Math.min(Math.max(Number(params.limit) || 30, 1), 100);
+  const page = Math.max(Number(params.page) || 1, 1);
+
+  const base: Record<string, any> = {
+    ticket_id: ticket._id,
+    organization_id: ticket.organization_id,
+    'attachments.0': { $exists: true },
+  };
+  if (!staff) base.is_internal = false;
+
+  const [messages, total] = await Promise.all([
+    SupportMessage.find(base)
+      .select('_id attachments sender_id sender_role created_at')
+      .sort({ created_at: -1, _id: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .maxTimeMS(5000)
+      .lean(),
+    SupportMessage.countDocuments(base),
+  ]);
+
+  const relations = await buildRelations(
+    [ticket],
+    staff,
+    String(reqUser._id),
+    messages.map((message) => message.sender_id),
+  );
+
+  const results = messages.flatMap((message) =>
+    (message.attachments ?? []).map((attachment: any, index: number) => {
+      const kind =
+        attachment.kind ??
+        kindForAttachment(attachment.content_type, attachment.file_name);
+      const removed = Boolean(attachment.removed_at);
+      return {
+        message_id: String(message._id),
+        index,
+        file_name: attachment.file_name,
+        content_type: attachment.content_type,
+        size_bytes: attachment.size_bytes,
+        kind: kind ?? null,
+        previewable: !removed && Boolean(kind) && isPreviewable(kind as any),
+        removed,
+        removed_at: attachment.removed_at ?? null,
+        sender_label: senderLabel(message, staff, relations.userMap),
+        sender_role: message.sender_role,
+        created_at: message.created_at,
+      };
+    }),
+  );
+
+  return createResponse(
+    httpStatus.OK,
+    'Ticket attachments fetched successfully.',
+    {
+      results,
+      total,
+      page,
+      limit,
+    },
+  );
+};
+
+/** Resolve an attachment for a signed URL (the token already proves access). */
+export const getAttachmentForToken = async (
+  ticketId: string,
+  messageId: string,
+  index: number,
+): Promise<ISupportAttachment> => {
+  const message = await SupportMessage.findOne({
+    _id: toObjectId(messageId),
+    ticket_id: toObjectId(ticketId),
+  });
+  if (!message)
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
+
+  if (
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= (message.attachments?.length ?? 0)
+  ) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
+  }
+
+  const attachment = message.attachments[index] as ISupportAttachment;
+  if (attachment.removed_at) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
+  }
+  return attachment;
+};
+
+/** Staff-only removal. The stored file is deleted; metadata stays as a tombstone. */
+export const removeAttachment = async (
+  reqUser: any,
+  ticketId: string,
+  messageId: string,
+  index: number,
+) => {
+  if (!isStaff(reqUser)) {
+    throw new ApiError(httpStatus.FORBIDDEN, 'Not allowed.');
+  }
+
+  const ticket = await loadTicketForWrite(reqUser, ticketId);
+  const message = await SupportMessage.findOne({
+    _id: toObjectId(messageId),
+    ticket_id: ticket._id,
+  });
+  if (!message)
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
+
+  if (
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= (message.attachments?.length ?? 0)
+  ) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'Attachment not found');
+  }
+
+  const attachment = message.attachments[index] as ISupportAttachment;
+
+  if (!attachment.removed_at) {
+    await deleteStoredFiles([attachment]);
+    await SupportMessage.updateOne(
+      { _id: message._id, ticket_id: ticket._id },
+      { $set: { [`attachments.${index}.removed_at`]: new Date() } },
+    );
+    await writeEvent(
+      ticket,
+      'attachment_removed',
+      attachment.file_name,
+      null,
+      true,
+      reqUser._id,
+    );
+  }
+
+  const updated = await SupportMessage.findById(message._id);
+  const relations = await buildRelations([ticket], true, String(reqUser._id));
+  return createResponse(httpStatus.OK, 'Attachment removed.', {
+    message: serializeMessage(
+      updated,
+      true,
+      String(reqUser._id),
+      relations.userMap,
+    ),
+  });
+};
+
 export interface ReplyBody {
   message: string;
   client_message_id?: string;
 }
-
 export const addMessage = async (
   reqUser: any,
   ticketId: string,
@@ -1377,6 +1634,8 @@ export const updateTicket = async (
   }
 
   let assignedUser: any = null;
+  let previousAssigneeName: string | null = null;
+  let nextAssigneeName: string | null = null;
   if (body.assigned_to !== undefined) {
     const nextAssignee = body.assigned_to ? String(body.assigned_to) : null;
     const current = ticket.assigned_to ? String(ticket.assigned_to) : null;
@@ -1393,6 +1652,15 @@ export const updateTicket = async (
             'Assignee must be an active super admin.',
           );
         }
+        nextAssigneeName = nameOf(assignedUser);
+      }
+      // Resolve the previous assignee's display name at write time so the
+      // activity chip never renders a raw Mongo _id.
+      if (current) {
+        const previousUser = await User.findOne({ _id: toObjectId(current) })
+          .select('first_name last_name')
+          .lean();
+        previousAssigneeName = previousUser ? nameOf(previousUser) : null;
       }
       updates.assigned_to = nextAssignee ? toObjectId(nextAssignee) : null;
     }
@@ -1427,8 +1695,8 @@ export const updateTicket = async (
     await writeEvent(
       ticket,
       'assigned',
-      ticket.assigned_to ? String(ticket.assigned_to) : null,
-      updates.assigned_to ? String(updates.assigned_to) : null,
+      previousAssigneeName,
+      nextAssigneeName,
       true,
       reqUser._id,
     );
