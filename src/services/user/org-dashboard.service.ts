@@ -10,6 +10,12 @@ import { Organization } from '../../models/organization.model.js';
 import { getRedis, isRedisConfigured } from '../../queues/redis.js';
 import { scrubErrorSummary } from '../../utils/dashboard-scrub.js';
 import {
+  dailyUsageDayKey,
+  nextDailyResetAt,
+  readDailyOrgTotal,
+} from '../quota.service.js';
+import { dailyScanLimitOf } from '../../utils/plan-features.util.js';
+import {
   dashboardTimezone,
   dayBuckets,
   resolveRange,
@@ -39,6 +45,16 @@ export interface OrgSummary {
   };
 }
 
+export interface OrgQuotaDaily {
+  limit: number;
+  used: number;
+  remaining: number;
+  utilization_pct: number;
+  state: 'ok' | 'near_limit' | 'exhausted';
+  reset_at: string;
+  timezone: string;
+}
+
 export interface OrgQuota {
   state: 'ok' | 'near_limit' | 'exhausted' | 'expiring' | 'no_subscription';
   plan_name: string;
@@ -55,6 +71,7 @@ export interface OrgQuota {
   next_plan_queued: boolean;
   source: 'live' | 'mirror';
   as_of: string;
+  daily: OrgQuotaDaily | null;
 }
 
 export const getOrgSummary = async (
@@ -158,6 +175,7 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
       next_plan_queued: false,
       source: 'mirror',
       as_of: now.toISOString(),
+      daily: null,
     };
   }
 
@@ -168,6 +186,7 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
     subscription.features?.find((f: any) => f.features_name === 'scan')
       ?.scan_limit ?? 0;
   const unlimited = scanLimit === 0;
+  const dailyLimit = dailyScanLimitOf(subscription.features as any);
 
   const expiresAt = new Date(subscription.expires_at);
   const periodStart = new Date(subscription.started_at);
@@ -233,6 +252,30 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
     state = 'expiring';
   }
 
+  const dailyUsed =
+    dailyLimit > 0
+      ? await readDailyOrgTotal(organizationId, dailyUsageDayKey(now))
+      : 0;
+  const dailyUtilization =
+    dailyLimit > 0 ? Math.round((dailyUsed / dailyLimit) * 100) : 0;
+  const daily: OrgQuotaDaily | null =
+    dailyLimit > 0
+      ? {
+          limit: dailyLimit,
+          used: dailyUsed,
+          remaining: Math.max(0, dailyLimit - dailyUsed),
+          utilization_pct: dailyUtilization,
+          state:
+            dailyUsed >= dailyLimit
+              ? 'exhausted'
+              : dailyUtilization >= config.dailyLimit.alertThresholdPct
+                ? 'near_limit'
+                : 'ok',
+          reset_at: nextDailyResetAt(now).toISOString(),
+          timezone: config.dailyLimit.timezone,
+        }
+      : null;
+
   return {
     state,
     plan_name: planName,
@@ -249,6 +292,7 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
     next_plan_queued: nextPlanQueued,
     source,
     as_of: now.toISOString(),
+    daily,
   };
 };
 
@@ -258,6 +302,7 @@ export interface OrgScanTrend {
   points: { date: string; count: number }[];
   comparison: { date: string; count: number }[] | null;
   peak_hour: { hour: number; count: number } | null;
+  daily_limit: number | null;
 }
 
 export const getOrgScanTrend = async (
@@ -358,12 +403,23 @@ export const getOrgScanTrend = async (
     peakHour = { hour: hourAgg[0]._id, count: hourAgg[0].count };
   }
 
+  const subscription = await Subscription.findOne({
+    organization_id: orgId,
+    status: 'active',
+  })
+    .sort({ started_at: -1 })
+    .lean();
+  const dailyLimit = subscription
+    ? dailyScanLimitOf(subscription.features as any)
+    : 0;
+
   return {
     range,
     timezone: tz,
     points: allDates,
     comparison,
     peak_hour: peakHour,
+    daily_limit: dailyLimit > 0 ? dailyLimit : null,
   };
 };
 
@@ -580,6 +636,33 @@ export const getOrgAttention = async (
             used: quota.used,
             limit: quota.scan_limit,
             utilization_pct: quota.utilization_pct ?? 0,
+          },
+        });
+      }
+    }
+
+    if (quota.daily) {
+      if (quota.daily.state === 'exhausted') {
+        items.push({
+          type: 'daily_limit_reached',
+          severity: 'critical',
+          data: {
+            used: quota.daily.used,
+            limit: quota.daily.limit,
+            reset_at: quota.daily.reset_at,
+            timezone: quota.daily.timezone,
+          },
+        });
+      } else if (quota.daily.state === 'near_limit') {
+        items.push({
+          type: 'daily_limit_near',
+          severity: 'warning',
+          data: {
+            used: quota.daily.used,
+            limit: quota.daily.limit,
+            utilization_pct: quota.daily.utilization_pct,
+            reset_at: quota.daily.reset_at,
+            timezone: quota.daily.timezone,
           },
         });
       }

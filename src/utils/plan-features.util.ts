@@ -3,6 +3,7 @@ import type { BillingCycle } from '../models/plan.model.js';
 export interface PlanFeatureEntry {
   features_name: string;
   scan_limit: number;
+  daily_scan_limit?: number;
 }
 
 /** Minimum plan shape needed to price a cycle. */
@@ -25,6 +26,9 @@ export const billingCycleLabel = (cycle: BillingCycle): string =>
 /** Reads the scan feature limit (`0` = unlimited) from a features snapshot. */
 export const scanLimitOf = (features: PlanFeatureEntry[] = []): number =>
   features.find((f) => f.features_name === 'scan')?.scan_limit ?? 0;
+
+export const dailyScanLimitOf = (features: PlanFeatureEntry[] = []): number =>
+  features.find((f) => f.features_name === 'scan')?.daily_scan_limit ?? 0;
 
 /**
  * Quarterly price for a plan. Always numeric: uses the explicit override when one

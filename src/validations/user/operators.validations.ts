@@ -26,6 +26,7 @@ export const createOperator = {
       .default('OPERATOR'),
     status: Joi.number().integer().valid(0, 1).optional().default(1),
     organization_id: Joi.string().custom(objectId).optional(),
+    daily_scan_limit: Joi.number().integer().min(0).optional().default(0),
   }),
 };
 
@@ -67,6 +68,7 @@ export const updateOperator = {
         .optional(),
       status: Joi.number().integer().valid(0, 1, 2).optional(),
       is_email_verified: Joi.boolean().optional(),
+      daily_scan_limit: Joi.number().integer().min(0).optional(),
     })
     .min(1),
 };

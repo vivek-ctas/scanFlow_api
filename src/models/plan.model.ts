@@ -13,7 +13,11 @@ export interface IPlan extends Document {
   billing_cycle: BillingCycle;
   currency: string;
   trial_days: number;
-  features: { features_name: string; scan_limit: number }[];
+  features: {
+    features_name: string;
+    scan_limit: number;
+    daily_scan_limit?: number;
+  }[];
   marketing_features: string[];
   status: number;
   is_custom_plan: boolean;
@@ -50,6 +54,7 @@ const planSchema = new Schema<IPlan, IPlanModel>(
           _id: false,
           features_name: { type: String, required: true, trim: true },
           scan_limit: { type: Number, default: 0, min: 0 },
+          daily_scan_limit: { type: Number, default: 0, min: 0 },
         },
       ],
       default: [],

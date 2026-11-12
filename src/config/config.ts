@@ -97,6 +97,14 @@ const envVarsSchema = Joi.object()
     DASHBOARD_CHART_CACHE_SECONDS: Joi.number()
       .default(300)
       .description('freshness window for dashboard chart widgets'),
+    DAILY_LIMIT_TIMEZONE: Joi.string()
+      .default('Asia/Kolkata')
+      .description('IANA timezone used for daily scan-limit day boundaries'),
+    DAILY_ALERT_THRESHOLD_PCT: Joi.number()
+      .min(1)
+      .max(100)
+      .default(90)
+      .description('daily scan usage % that triggers the amber alert'),
     SUPPORT_NOTIFY_EMAILS: Joi.string()
       .allow('')
       .description(
@@ -273,6 +281,10 @@ export const config = {
     nearLimitPct: envVars.DASHBOARD_NEAR_LIMIT_PCT,
     cacheFreshSeconds: envVars.DASHBOARD_CACHE_FRESH_SECONDS,
     chartCacheSeconds: envVars.DASHBOARD_CHART_CACHE_SECONDS,
+  },
+  dailyLimit: {
+    timezone: envVars.DAILY_LIMIT_TIMEZONE,
+    alertThresholdPct: envVars.DAILY_ALERT_THRESHOLD_PCT,
   },
   support: {
     notifyEmails: envVars.SUPPORT_NOTIFY_EMAILS,

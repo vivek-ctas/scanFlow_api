@@ -21,6 +21,7 @@ import {
   planPriceErrorMessage,
   resolvePlanPrice,
   scanLimitOf,
+  dailyScanLimitOf,
 } from '../utils/plan-features.util.js';
 import {
   writeActiveSubscriptionCache,
@@ -142,6 +143,8 @@ const writeActiveSubCache = async (
     scanLimitOf(sub.features),
     sub.expires_at,
     resetUsed,
+    undefined,
+    dailyScanLimitOf(sub.features),
   );
 };
 
@@ -177,6 +180,7 @@ export const populateActiveSubCache = async (
     active.expires_at,
     false,
     used,
+    dailyScanLimitOf(active.features),
   );
   return true;
 };
@@ -351,6 +355,7 @@ export const grantSubscription = async (
     features: plan.features.map((f) => ({
       features_name: f.features_name,
       scan_limit: f.scan_limit,
+      daily_scan_limit: f.daily_scan_limit ?? 0,
     })),
     billing_cycle: billingCycle,
     status: decided.status,
@@ -667,6 +672,7 @@ export const adjustScanLimits = async (
       sub.expires_at,
       false,
       used,
+      dailyScanLimitOf(sub.features),
     );
   }
   void invalidateDashboardCache();
@@ -774,6 +780,7 @@ export const renewSubscription = async (
         features: active.features.map((f) => ({
           features_name: f.features_name,
           scan_limit: f.scan_limit,
+          daily_scan_limit: f.daily_scan_limit ?? 0,
         })),
         billing_cycle: active.billing_cycle,
         status: 'future',

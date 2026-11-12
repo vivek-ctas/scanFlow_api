@@ -19,6 +19,7 @@ export interface IUser extends Document {
   organization_id?: mongoose.Types.ObjectId | null;
   is_email_verified: boolean;
   status: number;
+  daily_scan_limit: number;
   avatar?: string;
   operator_id?: string;
   pin_hash?: string;
@@ -88,6 +89,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     },
     is_email_verified: { type: Boolean, default: false },
     status: { type: Number, default: 1 },
+    daily_scan_limit: { type: Number, default: 0, min: 0 },
     avatar: { type: String, trim: true },
     created_by: { type: Schema.Types.ObjectId, default: null },
     modified_by: { type: Schema.Types.ObjectId, default: null },

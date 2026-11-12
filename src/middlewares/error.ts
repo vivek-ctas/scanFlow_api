@@ -79,6 +79,9 @@ export const errorHandler = (
   const response = {
     code: statusCode,
     message,
+    ...(err instanceof ApiError && err.isOperational && err.details
+      ? { details: err.details }
+      : {}),
     ...(config.env === 'development' && { stack: err.stack }),
   };
 
