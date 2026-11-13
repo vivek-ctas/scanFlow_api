@@ -173,6 +173,16 @@ export const downloadAttachment = {
   }),
 };
 
+export const listTicketAttachments = {
+  params: Joi.object().keys({
+    ticketId: Joi.string().custom(objectId).required(),
+  }),
+  query: Joi.object().keys({
+    page: Joi.number().integer().min(1).optional(),
+    limit: Joi.number().integer().min(1).max(100).optional(),
+  }),
+};
+
 export const getSummary = {
   query: Joi.object().keys({
     organization_id: Joi.string().custom(objectId).optional(),

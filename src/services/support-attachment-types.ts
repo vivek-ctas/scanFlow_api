@@ -276,7 +276,7 @@ export const DEFAULT_CONFIG: AttachmentConfig = {
   maxOrgStorageMB: 1024,
   minFreeDiskMB: 2048,
   uploadMBPerHour: 500,
-  tokenTTLSeconds: 120,
+  tokenTTLSeconds: 300,
   allowedKinds: ['image', 'document', 'text', 'video', 'archive'],
 };
 
@@ -544,7 +544,9 @@ export const validateOoxml = (
   if (safetyError) return safetyError;
 
   const entries = inspectZip(buffer).entries ?? [];
-  const names = new Set(entries.map((entry) => entry.name.toLowerCase()));
+  const names = new Set(
+    entries.map((entry) => entry.name.replace(/\\/g, '/').toLowerCase()),
+  );
 
   if (!names.has('[content_types].xml')) {
     return `The file is not a valid .${extension} document.`;

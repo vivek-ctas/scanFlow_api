@@ -34,3 +34,8 @@ export const getScan = catchAsync(async (req: Request, res: Response) => {
       createResponse(httpStatus.OK, 'Scan fetched successfully.', { scan }),
     );
 });
+
+export const getDailyUsage = catchAsync(async (req: Request, res: Response) => {
+  const result = await scanService.getDailyUsage(req.user);
+  res.status(result.status).json(result);
+});

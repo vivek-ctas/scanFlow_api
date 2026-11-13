@@ -64,12 +64,14 @@ router.get(
 router.get(
   '/tickets/:ticketId/messages/:messageId/attachments/:index/access',
   auth('viewSupport'),
+  validate(supportValidation.downloadAttachment),
   supportController.getAttachmentAccess,
 );
 
 router.delete(
   '/tickets/:ticketId/messages/:messageId/attachments/:index',
   auth('manageSupport'),
+  validate(supportValidation.downloadAttachment),
   supportController.removeAttachment,
 );
 
@@ -77,6 +79,7 @@ router.get(
   '/tickets/:ticketId/attachments',
   auth('viewSupport'),
   supportReadLimiter,
+  validate(supportValidation.listTicketAttachments),
   supportController.listTicketAttachments,
 );
 

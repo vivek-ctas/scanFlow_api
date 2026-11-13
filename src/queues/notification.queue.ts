@@ -33,8 +33,25 @@ export interface DirectAppNotificationJob {
   dedupe_key?: string;
 }
 
+/**
+ * Organization daily-limit alert. The scan path only enqueues this small job;
+ * the worker resolves the active organization admins and writes the in-app
+ * notification. Keeping recipient resolution in the worker means a scan never
+ * performs an extra Mongo query.
+ */
+export interface DailyQuotaAlertJob {
+  source: 'daily_quota';
+  organization_id: string;
+  level: 'near' | 'limit';
+  day_key: string;
+  used: number;
+  limit: number;
+  reset_at: string;
+  timezone: string;
+}
+
 export type AppNotificationJob =
-  SupportAppNotificationJob | DirectAppNotificationJob;
+  SupportAppNotificationJob | DirectAppNotificationJob | DailyQuotaAlertJob;
 
 const activeUserIds = async (
   filter: Record<string, any>,
@@ -135,6 +152,86 @@ const buildSupportContent = async (
   }
 };
 
+/** Formats the next business midnight in the alert's timezone ("12:00 AM IST"). */
+export const formatDailyResetLabel = (
+  resetAt: string,
+  timezone: string,
+): string => {
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  const parts = new Intl.DateTimeFormat('en-IN', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: timezone,
+    timeZoneName: 'short',
+  }).formatToParts(date);
+  const value = (type: string) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  const period = value('dayPeriod').toUpperCase();
+  return `${value('hour')}:${value('minute')} ${period} ${value('timeZoneName')}`.trim();
+};
+
+const buildDailyQuotaContent = (
+  job: DailyQuotaAlertJob,
+): { title: string; message: string } => {
+  const resetLabel = formatDailyResetLabel(job.reset_at, job.timezone);
+  const suchThat = resetLabel
+    ? ` until ${resetLabel}`
+    : ' until the limit resets';
+  if (job.level === 'limit') {
+    return {
+      title: 'Daily scan limit reached',
+      message:
+        `Your organization has reached its daily scan limit (${job.used} of ` +
+        `${job.limit} scans today). New scans are rejected${suchThat}.`,
+    };
+  }
+  const pct = job.limit > 0 ? Math.round((job.used / job.limit) * 100) : 100;
+  return {
+    title: 'Daily scan limit nearly reached',
+    message:
+      `Your organization has used ${job.used} of ${job.limit} scans today ` +
+      `(${pct}%). Scanning stops when the daily limit is reached.` +
+      (resetLabel ? ` Resets at ${resetLabel}.` : ''),
+  };
+};
+
+const dispatchDailyQuotaAlert = async (
+  job: DailyQuotaAlertJob,
+): Promise<any[]> => {
+  const admins = await User.find({
+    role: 'ORGANIZATION_ADMIN',
+    organization_id: job.organization_id,
+    status: 1,
+  })
+    .select('_id')
+    .lean();
+
+  if (!admins.length) {
+    logger.warn(
+      `[NOTIFICATION] no active organization admins for ${job.organization_id}; daily alert skipped`,
+    );
+    return [];
+  }
+
+  const content = buildDailyQuotaContent(job);
+
+  return notificationService.createForUsers({
+    user_ids: admins.map((admin: any) => String(admin._id)),
+    organization_id: job.organization_id,
+    type: 'quota_alert',
+    severity: job.level === 'limit' ? 'critical' : 'warning',
+    title: content.title,
+    message: content.message,
+    action_url: '/',
+    // Date + level: one alert per level per day per organization.
+    dedupe_key: `daily:${job.organization_id}:${job.day_key}:${job.level}`,
+  });
+};
+
 /**
  * Resolve and write an app notification immediately. This is called by the
  * producers (and by the worker) so a database row is guaranteed even when the
@@ -143,6 +240,10 @@ const buildSupportContent = async (
 export const dispatchAppNotification = async (
   job: AppNotificationJob,
 ): Promise<any[]> => {
+  if ('source' in job && job.source === 'daily_quota') {
+    return dispatchDailyQuotaAlert(job);
+  }
+
   if (!('source' in job) || job.source !== 'support') {
     return notificationService.createForUsers({
       user_ids: job.user_ids,
@@ -229,7 +330,9 @@ export const enqueueAppNotification = async (
   const id =
     job.source === 'support'
       ? `app:${job.event}:${job.ticket_id}:${job.message_id || job.status || 'event'}`
-      : undefined;
+      : job.source === 'daily_quota'
+        ? `daily-${job.organization_id}-${job.day_key}-${job.level}`
+        : undefined;
 
   return q.add('app', job, {
     jobId: id,
@@ -239,6 +342,35 @@ export const enqueueAppNotification = async (
     removeOnFail: 5000,
   });
 };
+
+export interface DailyQuotaAlertInput {
+  organization_id: string;
+  level: 'near' | 'limit';
+  day_key: string;
+  used: number;
+  limit: number;
+  reset_at: string;
+  timezone: string;
+}
+
+/**
+ * Fire-and-forget enqueue for an organization daily-limit alert. The scan
+ * result never depends on the queue: callers do `void enqueueDailyQuotaAlert()`
+ * and every failure is logged and swallowed here. The `enqueue` parameter is
+ * injectable so the failure path can be tested without breaking Redis.
+ */
+export const enqueueDailyQuotaAlert = (
+  input: DailyQuotaAlertInput,
+  enqueue: (
+    job: AppNotificationJob,
+  ) => Promise<unknown> = enqueueAppNotification,
+): Promise<unknown> =>
+  enqueue({ source: 'daily_quota', ...input }).catch((err: any) => {
+    logger.error(
+      `[QUEUE] daily quota alert enqueue failed for ${input.organization_id}: ${err.message}`,
+    );
+    return null;
+  });
 
 export const startNotificationWorker = async () => {
   if (!isRedisConfigured()) {

@@ -26,6 +26,8 @@ router.post(
   controller.batchCreateScans,
 );
 
+router.get('/daily-usage', auth('manageScans'), controller.getDailyUsage);
+
 router.get(
   '/:scanId',
   auth('manageScans'),

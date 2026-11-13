@@ -7,6 +7,7 @@ export type SubscriptionStatus = 'active' | 'future' | 'expired' | 'cancelled';
 export interface ISubscriptionFeature {
   features_name: string;
   scan_limit: number;
+  daily_scan_limit?: number;
 }
 
 export interface ISubscription extends Document {
@@ -58,6 +59,7 @@ const subscriptionSchema = new Schema<ISubscription, ISubscriptionModel>(
           _id: false,
           features_name: { type: String, required: true, trim: true },
           scan_limit: { type: Number, default: 0, min: 0 },
+          daily_scan_limit: { type: Number, default: 0, min: 0 },
         },
       ],
       default: [],

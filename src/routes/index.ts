@@ -25,6 +25,7 @@ export const PUBLIC_PATHS = [
   '/plans/public',
   '/contact/public',
   '/web-settings',
+  '/support/media',
 ];
 
 const router = Router();

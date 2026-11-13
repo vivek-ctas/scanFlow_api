@@ -345,17 +345,30 @@ async function runQuotaBoundary(token) {
   const wallMs = performance.now() - startedAt;
 
   const accepted = results.filter((result) => result.status === 202 || result.status === 200);
+  const isLimitRejection = (result) =>
+    result.status === 403 &&
+    (result.payload?.message === 'FORBIDDEN_QUOTA_EXCEEDED' ||
+      result.payload?.message === 'FORBIDDEN_DAILY_LIMIT_EXCEEDED' ||
+      result.payload?.message === 'FORBIDDEN_OPERATOR_DAILY_LIMIT_EXCEEDED');
   const quotaExceeded = results.filter(
     (result) => result.status === 403 && result.payload?.message === 'FORBIDDEN_QUOTA_EXCEEDED'
   );
-  const unexpected = results.filter(
+  const dailyExceeded = results.filter(
     (result) =>
-      !(result.status === 202 || result.status === 200) &&
-      !(result.status === 403 && result.payload?.message === 'FORBIDDEN_QUOTA_EXCEEDED')
+      result.status === 403 && result.payload?.message === 'FORBIDDEN_DAILY_LIMIT_EXCEEDED'
+  );
+  const operatorDailyExceeded = results.filter(
+    (result) =>
+      result.status === 403 &&
+      result.payload?.message === 'FORBIDDEN_OPERATOR_DAILY_LIMIT_EXCEEDED'
+  );
+  const rejected = results.filter(isLimitRejection);
+  const unexpected = results.filter(
+    (result) => !(result.status === 202 || result.status === 200) && !isLimitRejection(result)
   );
 
   const acceptedStats = summarize(accepted.map((result) => result.latencyMs));
-  const rejectedStats = summarize(quotaExceeded.map((result) => result.latencyMs));
+  const rejectedStats = summarize(rejected.map((result) => result.latencyMs));
 
   const report = {
     mode,
@@ -366,6 +379,8 @@ async function runQuotaBoundary(token) {
     wall_ms: Number(wallMs.toFixed(1)),
     accepted: accepted.length,
     quota_exceeded: quotaExceeded.length,
+    daily_exceeded: dailyExceeded.length,
+    operator_daily_exceeded: operatorDailyExceeded.length,
     unexpected: unexpected.length,
     statuses: tally(results).byStatus,
     accepted_latency_ms: {
@@ -385,7 +400,7 @@ async function runQuotaBoundary(token) {
   log(JSON.stringify(report, null, 2));
 
   if (unexpected.length) {
-    log(`\nFAIL: ${unexpected.length} unexpected response(s); expected only 2xx or 403 FORBIDDEN_QUOTA_EXCEEDED.`);
+    log(`\nFAIL: ${unexpected.length} unexpected response(s); expected only 2xx or a limit 403 (quota/daily/operator daily).`);
     unexpected.slice(0, 5).forEach((result) => {
       log(`  ${result.status} ${result.payload?.message ?? ''}`);
     });
@@ -398,7 +413,7 @@ async function runQuotaBoundary(token) {
     return 1;
   }
 
-  if (quotaExceeded.length && accepted.length === 0) {
+  if (rejected.length && accepted.length === 0) {
     log('\nFAIL: every request was rejected; the org had no quota headroom to measure the boundary.');
     return 1;
   }
