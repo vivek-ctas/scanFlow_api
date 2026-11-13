@@ -14,9 +14,6 @@ import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
 import { buildOperatorId } from '../../utils/operator-id.util.js';
 import { invalidateDashboardCache } from '../admin/dashboard.cache.js';
 import { systemLog } from '../../utils/system-log.js';
-import { isSuperAdmin } from '../../middlewares/guards/isSuperAdmin.js';
-import { dailyUsageDayKey, readDailyUsageHash } from '../quota.service.js';
-import { getRedis, isRedisConfigured } from '../../queues/redis.js';
 
 const OPERATOR_ROLES = ORGANIZATION_ASSIGNABLE_ROLES;
 const PIN_PATTERN = /^\d{6}$/;
@@ -57,13 +54,6 @@ export const createOperator = async (
   )!;
   const email = userBody.email ? normalizeEmail(userBody.email) : undefined;
 
-  if ('daily_scan_limit' in (userBody ?? {}) && !isSuperAdmin(reqUser)) {
-    throw new ApiError(
-      httpStatus.FORBIDDEN,
-      'Only a super admin may set an operator daily scan limit.',
-    );
-  }
-
   if (role === 'OPERATOR') {
     const pin = String(userBody.pin ?? '');
     if (!PIN_PATTERN.test(pin)) {
@@ -98,7 +88,6 @@ export const createOperator = async (
     is_super_admin: false,
     is_email_verified: false,
     status: userBody.status ?? 1,
-    daily_scan_limit: userBody.daily_scan_limit ?? 0,
     created_by: reqUser._id,
   };
 
@@ -188,78 +177,6 @@ export const listOperators = async (
     typeof user.toJSON === 'function' ? user.toJSON() : user,
   );
 
-  // Daily usage is an admin-only column. One HGETALL per distinct organization
-  // on the page (exactly one for an org-scoped request); operators never reach
-  // this endpoint (no `viewOperators` right) and are guarded here as well.
-  const canSeeUsage =
-    isSuperAdmin(reqUser) || reqUser?.role === 'ORGANIZATION_ADMIN';
-  if (canSeeUsage && results.length) {
-    const dayKey = dailyUsageDayKey();
-    const orgIds = [
-      ...new Set<string>(
-        results
-          .map(
-            (row: any) =>
-              row.organization_id?.id ??
-              row.organization_id?._id ??
-              row.organization_id,
-          )
-          .filter(Boolean)
-          .map(String),
-      ),
-    ];
-    const usersByOrg = new Map<string, Record<string, number>>();
-    const orgDailyLimit = new Map<string, number>();
-    await Promise.all(
-      orgIds.map(async (orgId) => {
-        const usage = await readDailyUsageHash(orgId, dayKey);
-        usersByOrg.set(orgId, usage.users);
-        // Organization daily limit from the active-subscription hash (one HGET).
-        let limit = 0;
-        if (isRedisConfigured()) {
-          try {
-            const raw = await getRedis().hget(
-              `org:${orgId}:activeSub`,
-              'daily_limit',
-            );
-            limit = Number(raw ?? 0) || 0;
-          } catch {
-            limit = 0;
-          }
-        }
-        orgDailyLimit.set(orgId, limit);
-      }),
-    );
-    const isSuper = isSuperAdmin(reqUser);
-    for (const row of results) {
-      const orgId = String(
-        row.organization_id?.id ?? row.organization_id ?? '',
-      );
-      const used = usersByOrg.get(orgId)?.[String(row.id)] ?? 0;
-      row.daily_scan_used = used;
-      const operatorCap = Number(row.daily_scan_limit ?? 0) || 0;
-      const orgLimit = orgDailyLimit.get(orgId) ?? 0;
-      // Effective limit: operator override if set, else organization limit.
-      const effective =
-        operatorCap > 0 ? operatorCap : orgLimit > 0 ? orgLimit : null;
-      row.effective_daily_limit = effective;
-      row.daily_limit_source =
-        operatorCap > 0 ? 'operator' : orgLimit > 0 ? 'organization' : null;
-      // Raw override is super-admin only.
-      if (!isSuper) {
-        delete row.daily_scan_limit;
-      }
-    }
-  } else {
-    // Hide raw override from non-admins regardless.
-    for (const row of results) {
-      delete row.daily_scan_limit;
-      delete row.daily_scan_used;
-      delete row.effective_daily_limit;
-      delete row.daily_limit_source;
-    }
-  }
-
   return createResponse(httpStatus.OK, 'Operators fetched successfully.', {
     results,
     page: users.page,
@@ -294,7 +211,6 @@ const OPERATOR_UPDATE_KEYS = [
   'role',
   'status',
   'is_email_verified',
-  'daily_scan_limit',
 ];
 
 export const updateOperatorById = async (
@@ -360,10 +276,10 @@ export const updateOperatorById = async (
     user.pin_locked_until = null;
   }
 
-  if ('daily_scan_limit' in (updateBody ?? {}) && !isSuperAdmin(reqUser)) {
+  if ('daily_scan_limit' in (updateBody ?? {})) {
     throw new ApiError(
-      httpStatus.FORBIDDEN,
-      'Only a super admin may set an operator daily scan limit.',
+      httpStatus.BAD_REQUEST,
+      '"daily_scan_limit" is not allowed',
     );
   }
 

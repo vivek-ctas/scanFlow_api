@@ -6,6 +6,7 @@ import * as orgDashboardService from '../../services/user/org-dashboard.service.
 import { getOrCompute } from '../../services/admin/dashboard.cache.js';
 import type { WidgetCacheOptions } from '../../services/admin/dashboard.cache.js';
 import { resolveOrganizationScope } from '../../middlewares/guards/orgScope.js';
+import { isSuperAdmin } from '../../middlewares/guards/isSuperAdmin.js';
 
 const fresh = () => 60;
 const chartFresh = () => 300;
@@ -52,9 +53,10 @@ export const getOrgSummary = catchAsync(async (req: Request, res: Response) => {
 export const getOrgQuota = catchAsync(async (req: Request, res: Response) => {
   const organizationId = getOrgId(req);
   const options: WidgetCacheOptions = { freshSeconds: quotaFresh() };
-  const key = `org-dashboard:quota:${organizationId}`;
+  const includeSuggestion = isSuperAdmin(req.user as any);
+  const key = `org-dashboard:quota:${organizationId}${includeSuggestion ? ':super' : ''}`;
   const result = await getOrCompute(key, options, () =>
-    orgDashboardService.getOrgQuota(organizationId),
+    orgDashboardService.getOrgQuota(organizationId, { includeSuggestion }),
   );
   respond(res, 'Organization quota fetched successfully.', result);
 });

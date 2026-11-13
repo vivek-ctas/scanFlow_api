@@ -7,24 +7,10 @@ const planIdParams = {
   }),
 };
 
-const featureObject = Joi.object()
-  .keys({
-    features_name: Joi.string().required(),
-    scan_limit: Joi.number().integer().min(0).optional().default(0),
-    daily_scan_limit: Joi.number().integer().min(0).optional().default(0),
-  })
-  .custom((value, helpers) => {
-    const scanLimit = Number(value.scan_limit ?? 0);
-    const dailyLimit = Number(value.daily_scan_limit ?? 0);
-    if (scanLimit > 0 && dailyLimit > scanLimit) {
-      return helpers.error('any.invalid');
-    }
-    return value;
-  })
-  .messages({
-    'any.invalid':
-      '"daily_scan_limit" must be less than or equal to "scan_limit"',
-  });
+const featureObject = Joi.object().keys({
+  features_name: Joi.string().required(),
+  scan_limit: Joi.number().integer().min(0).optional().default(0),
+});
 
 const billingCycle = Joi.string().valid('month', 'quarterly');
 
