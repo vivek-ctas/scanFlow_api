@@ -42,8 +42,6 @@ export interface ActiveSubCache {
   scanLimit: number;
   expiresAt: number;
   used: number;
-  /** Organization daily cap; 0 = no daily limit. Missing field reads as 0. */
-  dailyLimit: number;
 }
 
 /**
@@ -58,7 +56,6 @@ export const writeActiveSubscriptionCache = async (
   expiresAt: Date,
   resetUsed: boolean = true,
   used?: number,
-  dailyLimit: number = 0,
 ): Promise<void> => {
   if (!isRedisConfigured()) {
     return;
@@ -69,7 +66,6 @@ export const writeActiveSubscriptionCache = async (
     const fields: Record<string, string> = {
       limit: String(scanLimit),
       expiresAt: String(expiresAt.getTime()),
-      daily_limit: String(Math.max(0, Number(dailyLimit) || 0)),
     };
     if (resetUsed) {
       fields.used = '0';
@@ -89,11 +85,6 @@ export const writeActiveSubscriptionCache = async (
 /** Reads the active-subscription cache hash; null when absent/unconfigured. */
 export const readActiveSubUsage = async (
   organizationId: string,
-  _sub?: {
-    started_at: Date;
-    expires_at: Date;
-    features: { scan_limit: number; daily_scan_limit?: number }[];
-  },
 ): Promise<ActiveSubCache | null> => {
   if (!isRedisConfigured()) {
     return null;
@@ -105,16 +96,14 @@ export const readActiveSubUsage = async (
       'limit',
       'expiresAt',
       'used',
-      'daily_limit',
     );
     const scanLimit = parseInt(String(raw[0]), 10);
     const expiresAt = parseInt(String(raw[1]), 10);
     const used = parseInt(String(raw[2] ?? '0'), 10);
-    const dailyLimit = parseInt(String(raw[3] ?? '0'), 10) || 0;
     if (Number.isNaN(expiresAt)) {
       return null;
     }
-    return { scanLimit, expiresAt, used, dailyLimit };
+    return { scanLimit, expiresAt, used };
   } catch (err: any) {
     logger.error(
       `[QUOTA] activeSub cache read failed for ${organizationId}: ${err.message}`,
@@ -145,38 +134,6 @@ export const readDailyOrgTotal = async (
   }
 };
 
-/**
- * Reads one day's hash (org total + every operator counter) with a single
- * `HGETALL`. Callers batching a page of operators should call this once per
- * distinct organization, never once per row.
- */
-export const readDailyUsageHash = async (
-  organizationId: string,
-  dayKeyValue: string = dailyUsageDayKey(),
-): Promise<{ total: number; users: Record<string, number> }> => {
-  if (!isRedisConfigured()) {
-    return { total: 0, users: {} };
-  }
-  try {
-    const raw = await getRedis().hgetall(
-      dailyUsageCacheKey(organizationId, dayKeyValue),
-    );
-    const total = Number(raw.t ?? 0) || 0;
-    const users: Record<string, number> = {};
-    for (const [field, value] of Object.entries(raw)) {
-      if (field.startsWith('u:')) {
-        users[field.slice(2)] = Number(value) || 0;
-      }
-    }
-    return { total, users };
-  } catch (err: any) {
-    logger.error(
-      `[QUOTA] daily usage hash read failed for ${organizationId}: ${err.message}`,
-    );
-    return { total: 0, users: {} };
-  }
-};
-
 /** Deletes the active-subscription cache hash. */
 export const deleteActiveSubscriptionCache = async (
   organizationId: string,
@@ -194,80 +151,65 @@ export const deleteActiveSubscriptionCache = async (
   }
 };
 
-// Atomic quota check-and-increment. Cycle and daily counters live in two
-// hashes; both checks and both increments happen in this one script so either
+// Atomic quota check-and-increment. The cycle counter lives in the
+// active-subscription hash; the organization daily total lives in its own day
+// hash. Both checks and increments happen in this one script so either
 // everything is reserved or nothing is. Return array:
-//   { code, cycleUsed, orgDaily, userDaily, dailyLimit, userCap, orgCrossing, userCrossing }
+//   { code, cycleUsed, orgDaily, dailyLimit, orgCrossing }
 // code: 1 ok / -1 cycle exceeded / -2 cache miss / -3 subscription expired /
-//       -4 organization daily exceeded / -5 operator daily exceeded.
+//       -4 organization daily exceeded.
 // `limit === 0` and `dailyLimit === 0` mean unlimited / no daily cap.
 const RESERVE_SCRIPT = `
-local subData = redis.call('HMGET', KEYS[1], 'limit', 'expiresAt', 'used', 'daily_limit')
+local subData = redis.call('HMGET', KEYS[1], 'limit', 'expiresAt', 'used')
 local limit = tonumber(subData[1])
 local expiresAt = tonumber(subData[2])
 local used = tonumber(subData[3] or '0')
-local dailyLimit = tonumber(subData[4] or '0') or 0
-local userCap = tonumber(ARGV[4] or '0') or 0
+local dailyLimit = tonumber(ARGV[3] or '0') or 0
 local now = tonumber(ARGV[1])
 if not limit or not expiresAt then
-  return {-2, used, 0, 0, dailyLimit, userCap, 0, 0}
+  return {-2, used, 0, dailyLimit, 0}
 end
 if expiresAt <= now then
-  return {-3, used, 0, 0, dailyLimit, userCap, 0, 0}
+  return {-3, used, 0, dailyLimit, 0}
 end
 if limit ~= 0 and used + 1 > limit then
-  return {-1, used, 0, 0, dailyLimit, userCap, 0, 0}
+  return {-1, used, 0, dailyLimit, 0}
 end
 
-local dailyApplies = dailyLimit ~= 0 or userCap ~= 0
 local total = 0
-local userUsed = 0
 local orgCrossing = 0
-local userCrossing = 0
 
-if dailyApplies then
+if dailyLimit ~= 0 then
   total = tonumber(redis.call('HGET', KEYS[2], 't') or '0')
-  userUsed = tonumber(redis.call('HGET', KEYS[2], 'u:' .. ARGV[3]) or '0')
-  if dailyLimit ~= 0 and total + 1 > dailyLimit then
-    return {-4, used, total, userUsed, dailyLimit, userCap, 0, 0}
-  end
-  if userCap ~= 0 and userUsed + 1 > userCap then
-    return {-5, used, total, userUsed, dailyLimit, userCap, 0, 0}
+  if total + 1 > dailyLimit then
+    return {-4, used, total, dailyLimit, 0}
   end
 end
 
 local newVal = redis.call('HINCRBY', KEYS[1], 'used', 1)
 redis.call('PEXPIREAT', KEYS[1], expiresAt + 3600000)
 
-if dailyApplies then
+if dailyLimit ~= 0 then
   total = redis.call('HINCRBY', KEYS[2], 't', 1)
-  userUsed = redis.call('HINCRBY', KEYS[2], 'u:' .. ARGV[3], 1)
   redis.call('PEXPIREAT', KEYS[2], tonumber(ARGV[2]))
-  if dailyLimit ~= 0 then
-    if total >= dailyLimit then
-      if redis.call('HSETNX', KEYS[2], 'a100', '1') == 1 then orgCrossing = 100 end
-    else
-      local amberAt = math.ceil(dailyLimit * tonumber(ARGV[5]) / 100)
-      if total >= amberAt then
-        if redis.call('HSETNX', KEYS[2], 'a90', '1') == 1 then orgCrossing = 90 end
-      end
+  if total >= dailyLimit then
+    if redis.call('HSETNX', KEYS[2], 'a100', '1') == 1 then orgCrossing = 100 end
+  else
+    local amberAt = math.ceil(dailyLimit * tonumber(ARGV[4]) / 100)
+    if total >= amberAt then
+      if redis.call('HSETNX', KEYS[2], 'a90', '1') == 1 then orgCrossing = 90 end
     end
-  end
-  if userCap ~= 0 and userUsed >= userCap then
-    if redis.call('HSETNX', KEYS[2], 'ou:' .. ARGV[3], '1') == 1 then userCrossing = 1 end
   end
 end
 
-return {1, newVal, total, userUsed, dailyLimit, userCap, orgCrossing, userCrossing}
+return {1, newVal, total, dailyLimit, orgCrossing}
 `;
 
 export type DailyCrossing = 'none' | 'near' | 'limit';
 
 export interface ReserveScanOptions {
-  /** Authenticated user id; the operator daily counter is keyed by it. */
-  userId?: string;
-  /** Operator daily cap from the user record; 0 = none. */
-  userCap?: number;
+  /** Organization-wide daily cap; 0 = none. Read from the organization document. */
+  dailyLimit?: number;
   /** Business-day key captured once per request (defaults to now). */
   dayKey?: string;
   /** Request timestamp (defaults to now); drives expiry and the day key. */
@@ -279,13 +221,10 @@ export type ReserveResult =
       status: 'ok';
       count: number;
       orgDaily: number;
-      userDaily: number;
       dailyLimit: number;
-      userCap: number;
-      /** True when a daily counter was actually incremented. */
+      /** True when the daily counter was actually incremented. */
       dailyApplied: boolean;
       orgCrossing: DailyCrossing;
-      operatorCrossing: boolean;
     }
   | { status: 'quota_exceeded' }
   | { status: 'subscription_expired' }
@@ -293,16 +232,7 @@ export type ReserveResult =
   | {
       status: 'organization_daily_exceeded';
       orgDaily: number;
-      userDaily: number;
       dailyLimit: number;
-      userCap: number;
-    }
-  | {
-      status: 'operator_daily_exceeded';
-      orgDaily: number;
-      userDaily: number;
-      dailyLimit: number;
-      userCap: number;
     };
 
 const toNumber = (value: unknown): number => {
@@ -314,9 +244,9 @@ const toNumber = (value: unknown): number => {
  * Atomic quota check-and-increment. Redis unreachable (or unconfigured) throws
  * a 503 — the scan path must not create a scan in that case.
  *
- * The daily cap is read from the active-subscription hash inside the same
- * script (one extra `HMGET` field, no caller lookup). A missing `daily_limit`
- * field and a missing business-day hash both read as `0` — feature off.
+ * The organization daily limit is passed by the caller (read from the already
+ * loaded organization document — no extra lookup). A missing business-day hash
+ * reads as `0`; `dailyLimit = 0` performs no daily operation.
  */
 export const reserveScanUsage = async (
   organizationId: string,
@@ -331,8 +261,7 @@ export const reserveScanUsage = async (
   const redis = getRedis();
   const now = options.now ?? new Date();
   const dayKeyValue = options.dayKey ?? dailyUsageDayKey(now);
-  const userId = options.userId ? String(options.userId) : '';
-  const userCap = userId ? Math.max(0, toNumber(options.userCap ?? 0)) : 0;
+  const dailyLimit = Math.max(0, toNumber(options.dailyLimit ?? 0));
   const dayExpiry = nextDailyResetAt(now).getTime() + DAY_HASH_GRACE_MS;
   try {
     const raw = (await redis.eval(
@@ -342,19 +271,15 @@ export const reserveScanUsage = async (
       dailyUsageCacheKey(organizationId, dayKeyValue),
       String(now.getTime()),
       String(dayExpiry),
-      userId,
-      String(userCap),
+      String(dailyLimit),
       String(config.dailyLimit.alertThresholdPct),
     )) as unknown[];
     const [codeRaw, ...rest] = Array.isArray(raw) ? raw : [];
     const code = toNumber(codeRaw);
     const cycleUsed = toNumber(rest[0]);
     const orgDaily = toNumber(rest[1]);
-    const userDaily = toNumber(rest[2]);
-    const dailyLimit = toNumber(rest[3]);
-    const resolvedUserCap = toNumber(rest[4]);
-    const orgCrossingRaw = toNumber(rest[5]);
-    const operatorCrossingRaw = toNumber(rest[6]);
+    const resolvedDailyLimit = toNumber(rest[2]);
+    const orgCrossingRaw = toNumber(rest[3]);
 
     switch (code) {
       case -2:
@@ -367,34 +292,21 @@ export const reserveScanUsage = async (
         return {
           status: 'organization_daily_exceeded',
           orgDaily,
-          userDaily,
-          dailyLimit,
-          userCap: resolvedUserCap,
-        };
-      case -5:
-        return {
-          status: 'operator_daily_exceeded',
-          orgDaily,
-          userDaily,
-          dailyLimit,
-          userCap: resolvedUserCap,
+          dailyLimit: resolvedDailyLimit,
         };
       default:
         return {
           status: 'ok',
           count: cycleUsed,
           orgDaily,
-          userDaily,
-          dailyLimit,
-          userCap: resolvedUserCap,
-          dailyApplied: resolvedUserCap !== 0 || dailyLimit !== 0,
+          dailyLimit: resolvedDailyLimit,
+          dailyApplied: resolvedDailyLimit !== 0,
           orgCrossing:
             orgCrossingRaw >= 100
               ? 'limit'
               : orgCrossingRaw > 0
                 ? 'near'
                 : 'none',
-          operatorCrossing: operatorCrossingRaw === 1,
         };
     }
   } catch (err: any) {
@@ -425,26 +337,18 @@ if ARGV[1] == '1' and redis.call('EXISTS', KEYS[2]) == 1 then
   if total > 0 then
     redis.call('HINCRBY', KEYS[2], 't', -1)
   end
-  if ARGV[2] ~= '' then
-    local ukey = 'u:' .. ARGV[2]
-    local userUsed = tonumber(redis.call('HGET', KEYS[2], ukey) or '0')
-    if userUsed > 0 then
-      redis.call('HINCRBY', KEYS[2], ukey, -1)
-    end
-  end
 end
 return 1
 `;
 
 /**
- * Releases a reservation taken by this request when a duplicate is detected.
- * `dayKey`/`userId`/`dailyApplied` come from the matching reserve call; omitting
- * them keeps the pre-daily call sites working (cycle counter only).
+ * Releases a reservation taken by this request when a duplicate is detected or
+ * an insert fails. `dayKey`/`dailyApplied` come from the matching reserve call;
+ * omitting them keeps the pre-daily call sites working (cycle counter only).
  */
 export const releaseScanUsage = async (
   organizationId: string,
   dayKeyValue?: string,
-  userId?: string,
   dailyApplied: boolean = false,
 ): Promise<void> => {
   if (!isRedisConfigured()) {
@@ -458,7 +362,6 @@ export const releaseScanUsage = async (
       activeSubscriptionCacheKey(organizationId),
       dailyUsageCacheKey(organizationId, dayKeyValue ?? dailyUsageDayKey()),
       dailyApplied ? '1' : '0',
-      userId ? String(userId) : '',
     );
   } catch (err: any) {
     logger.error(
@@ -485,10 +388,7 @@ export const reconcileScanUsage = async (): Promise<
   const scanLimitOfForSub = (features: any[]) =>
     features.find((f: any) => f.features_name === 'scan')?.scan_limit ?? 0;
   for (const sub of activeSubs) {
-    const raw = await readActiveSubUsage(
-      String(sub.organization_id),
-      sub as any,
-    );
+    const raw = await readActiveSubUsage(String(sub.organization_id));
     const used = raw?.used ?? 0;
     const limit = scanLimitOfForSub(sub.features);
     await Usage.updateOne(
@@ -523,7 +423,7 @@ export const flushActiveSubUsage = async (
   if (!sub) {
     return null;
   }
-  const raw = await readActiveSubUsage(organizationId, sub as any);
+  const raw = await readActiveSubUsage(organizationId);
   if (!raw) {
     return null;
   }

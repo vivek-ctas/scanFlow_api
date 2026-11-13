@@ -16,7 +16,6 @@ export interface IPlan extends Document {
   features: {
     features_name: string;
     scan_limit: number;
-    daily_scan_limit?: number;
   }[];
   marketing_features: string[];
   status: number;
@@ -54,7 +53,6 @@ const planSchema = new Schema<IPlan, IPlanModel>(
           _id: false,
           features_name: { type: String, required: true, trim: true },
           scan_limit: { type: Number, default: 0, min: 0 },
-          daily_scan_limit: { type: Number, default: 0, min: 0 },
         },
       ],
       default: [],

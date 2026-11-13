@@ -9,6 +9,7 @@ export interface IOrganization extends Document {
   country_name?: string;
   status: number;
   operator_seq: number;
+  daily_scan_limit: number;
   created_by?: mongoose.Types.ObjectId | null;
   modified_by?: mongoose.Types.ObjectId | null;
   created_at: Date;
@@ -30,6 +31,7 @@ const organizationSchema = new Schema<IOrganization, IOrganizationModel>(
     country_name: { type: String, trim: true },
     status: { type: Number, default: 1 },
     operator_seq: { type: Number, default: 1000 },
+    daily_scan_limit: { type: Number, default: 0, min: 0 },
     created_by: { type: Schema.Types.ObjectId, index: true, default: null },
     modified_by: { type: Schema.Types.ObjectId, index: true, default: null },
   },

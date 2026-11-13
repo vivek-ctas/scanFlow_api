@@ -32,6 +32,7 @@
     "migrate:email-index": "tsx src/scripts/migrate-email-index.ts",
     "migrate:operator-ids": "tsx src/scripts/migrate-operator-ids.ts",
     "migrate:operator-seq": "tsx src/scripts/migrate-operator-seq.ts",
+    "migrate:daily-limit-org": "tsx src/scripts/migrate-daily-limit-to-organization.ts",
     "backfill:support-last-public-message": "tsx src/scripts/backfill-support-last-public-message.ts",
     "seed:faqs": "tsx src/scripts/seed-support-faqs.ts"
   },
