@@ -41,6 +41,7 @@
     "bullmq": "^6.3.8",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
+    "cron-parser": "^5.10.6",
     "dotenv": "^16.4.7",
     "express": "^5.0.1",
     "express-mongo-sanitize": "^2.2.0",

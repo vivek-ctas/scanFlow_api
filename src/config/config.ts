@@ -204,6 +204,49 @@ const envVarsSchema = Joi.object()
     RAZORPAY_WEBHOOK_SECRET: Joi.string()
       .allow('')
       .description('Razorpay webhook signing secret'),
+    CRONZIVO_API_KEY: Joi.string()
+      .allow('')
+      .default('')
+      .description('CronZivo global key (CURRENT slot)'),
+    CRONZIVO_API_KEY_SECONDARY: Joi.string()
+      .allow('')
+      .default('')
+      .description('CronZivo global key (rotation overlap slot)'),
+    CRONZIVO_PRODUCT_CODE: Joi.string()
+      .uppercase()
+      .pattern(/^[A-Z][A-Z0-9_]*$/)
+      .default('SCANFLOW')
+      .description('CronZivo product code used as the token audience'),
+    CRONZIVO_ENVIRONMENT: Joi.string()
+      .uppercase()
+      .valid('DEVELOPMENT', 'STAGING', 'PRODUCTION')
+      .default('PRODUCTION')
+      .description('CronZivo environment used as the token audience'),
+    CRONZIVO_ALLOWED_ORIGINS: Joi.string()
+      .allow('')
+      .default('')
+      .description(
+        'comma-separated browser origins allowed to call the prefix',
+      ),
+    CRONZIVO_MGMT_PREFIX: Joi.string()
+      .pattern(/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/)
+      .default('/internal/cron')
+      .description('Cron Management API mount prefix'),
+    CRONZIVO_BULK_RUN_CONCURRENCY: Joi.number()
+      .integer()
+      .min(1)
+      .default(1)
+      .description('max bulk-run jobs accepted at once'),
+    CRONZIVO_EXECUTION_RETENTION_DAYS: Joi.number()
+      .integer()
+      .min(0)
+      .default(30)
+      .description('execution history TTL in days; 0 disables the TTL index'),
+    CRONZIVO_RECONCILE_SEC: Joi.number()
+      .integer()
+      .min(5)
+      .default(30)
+      .description('scheduler reconcile interval in seconds'),
   })
   .unknown();
 
@@ -214,6 +257,35 @@ const { value: envVars, error } = envVarsSchema
 if (error) {
   throw new Error(`Config validation error: ${error.message}`);
 }
+
+const cronzivoKey = String(envVars.CRONZIVO_API_KEY ?? '');
+const cronzivoKeySecondary = String(envVars.CRONZIVO_API_KEY_SECONDARY ?? '');
+
+if (cronzivoKeySecondary && cronzivoKeySecondary === cronzivoKey) {
+  throw new Error(
+    'Config validation error: CRONZIVO_API_KEY_SECONDARY must differ from CRONZIVO_API_KEY',
+  );
+}
+
+if (envVars.NODE_ENV === 'production' && cronzivoKey) {
+  const weak =
+    cronzivoKey.length < 32 ||
+    /^(change|replace|your|example|placeholder|test)/i.test(cronzivoKey);
+  if (weak) {
+    throw new Error(
+      'Config validation error: CRONZIVO_API_KEY must be at least 32 random characters in production',
+    );
+  }
+}
+
+const cronzivoAllowedOrigins = String(envVars.CRONZIVO_ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const cronzivoPrefix = String(envVars.CRONZIVO_MGMT_PREFIX ?? '/internal/cron');
+const normalizedCronzivoPrefix =
+  cronzivoPrefix === '/' ? '/' : `/${cronzivoPrefix.replace(/^\/+|\/+$/g, '')}`;
 
 /**
  * Appends '-test' to the database name of a Mongo URI, preserving any
@@ -328,6 +400,17 @@ export const config = {
     keyId: envVars.RAZORPAY_KEY_ID,
     keySecret: envVars.RAZORPAY_KEY_SECRET,
     webhookSecret: envVars.RAZORPAY_WEBHOOK_SECRET,
+  },
+  cronzivo: {
+    apiKey: cronzivoKey,
+    apiKeySecondary: cronzivoKeySecondary,
+    productCode: envVars.CRONZIVO_PRODUCT_CODE,
+    environment: envVars.CRONZIVO_ENVIRONMENT,
+    allowedOrigins: cronzivoAllowedOrigins,
+    mgmtPrefix: normalizedCronzivoPrefix,
+    bulkRunConcurrency: envVars.CRONZIVO_BULK_RUN_CONCURRENCY,
+    executionRetentionDays: envVars.CRONZIVO_EXECUTION_RETENTION_DAYS,
+    reconcileSec: envVars.CRONZIVO_RECONCILE_SEC,
   },
 };
 

@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import config from './config/config.js';
 import { logger } from './config/logger.js';
 import { setSystemErrorModel } from './utils/system-error.handler.js';
-import { SystemError, SystemLog, Usage } from './models/index.js';
+import { SystemError, SystemLog } from './models/index.js';
 import { setSystemLogModel } from './utils/system-log.js';
 import {
   startWebhookWorker,
@@ -10,26 +10,17 @@ import {
 } from './queues/webhook.worker.js';
 import { startSupportWorker } from './queues/support.worker.js';
 import { startNotificationWorker } from './queues/notification.queue.js';
-import { runAutoCloseJob } from './services/support.service.js';
-import { withCronRun } from './cron/cron-runner.js';
 import { reconcileScanUsage } from './services/quota.service.js';
 import { normalizeAllQueuePriorities } from './services/subscription.service.js';
 import { getRedis, isRedisConfigured } from './queues/redis.js';
-import {
-  runSubscriptionExpiryJob,
-  runSubscriptionReminderJob,
-} from './cron/subscription/index.js';
+import { cronManager } from './cron/management/manager.js';
 
 let worker: Awaited<ReturnType<typeof startWebhookWorker>> | null = null;
 let supportWorker: Awaited<ReturnType<typeof startSupportWorker>> | null = null;
 let notificationWorker: Awaited<
   ReturnType<typeof startNotificationWorker>
 > | null = null;
-let supportAutoCloseTimer: NodeJS.Timeout | null = null;
 let reconcileTimer: NodeJS.Timeout | null = null;
-let activationTimer: NodeJS.Timeout | null = null;
-let reminderTimer: NodeJS.Timeout | null = null;
-let purgeTimer: NodeJS.Timeout | null = null;
 let webhookBatchTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 
@@ -54,40 +45,6 @@ const writeHeartbeat = async () => {
   }
 };
 
-const everyMinute = async () => {
-  await runSubscriptionExpiryJob();
-};
-
-const everyHalfHour = async () => {
-  await runSubscriptionReminderJob();
-};
-
-const everyHour = async () => {
-  try {
-    const expired = await Usage.deleteMany({
-      purge_after: { $lte: new Date() },
-    });
-    logger.info(
-      `[PURGE] removed ${expired.deletedCount} usage rows past retention`,
-    );
-  } catch (err: any) {
-    logger.error(`[PURGE] usage purge failed: ${err.message}`);
-  }
-};
-
-const autoCloseSupport = async () => {
-  try {
-    const closed = await withCronRun('support-auto-close', () =>
-      runAutoCloseJob(),
-    );
-    if (closed) {
-      logger.info(`[SUPPORT] auto-closed ${closed} resolved ticket(s)`);
-    }
-  } catch (err: any) {
-    logger.error(`[SUPPORT] auto-close failed: ${err.message}`);
-  }
-};
-
 const start = async () => {
   setSystemErrorModel(SystemError);
   setSystemLogModel(SystemLog);
@@ -109,18 +66,15 @@ const start = async () => {
   await writeHeartbeat();
   heartbeatTimer = setInterval(writeHeartbeat, 30_000);
 
-  // Boot maintenance (§12): repack queue priorities, then run an activation +
-  // reconciliation pass before the periodic loops take over.
+  // Boot maintenance (§12): repack queue priorities, then run a reconciliation
+  // pass before the periodic loops take over. Product crons are owned by the
+  // CronZivo scheduler below; the API process only persists their schedules.
   await normalizeAllQueuePriorities();
-  await everyMinute();
   await reconcile();
-  await everyHalfHour();
   reconcileTimer = setInterval(reconcile, 30_000);
-  activationTimer = setInterval(everyMinute, 60_000);
-  reminderTimer = setInterval(everyHalfHour, 1_800_000);
-  purgeTimer = setInterval(everyHour, 3_600_000);
-  await autoCloseSupport();
-  supportAutoCloseTimer = setInterval(autoCloseSupport, 3_600_000);
+
+  await cronManager.start();
+
   webhookBatchTimer = setInterval(
     () =>
       sweepWebhookBatches().catch((err: any) =>
@@ -135,24 +89,13 @@ const shutdown = async () => {
   if (reconcileTimer) {
     clearInterval(reconcileTimer);
   }
-  if (activationTimer) {
-    clearInterval(activationTimer);
-  }
-  if (reminderTimer) {
-    clearInterval(reminderTimer);
-  }
-  if (purgeTimer) {
-    clearInterval(purgeTimer);
-  }
   if (webhookBatchTimer) {
     clearInterval(webhookBatchTimer);
   }
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
   }
-  if (supportAutoCloseTimer) {
-    clearInterval(supportAutoCloseTimer);
-  }
+  await cronManager.stop();
   if (worker) {
     await worker.close();
   }

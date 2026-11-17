@@ -20,6 +20,10 @@ import {
   Counter,
   SupportTicket,
   SupportMessage,
+  CronSchedule,
+  CronExecution,
+  CronJobLog,
+  CronManagementAudit,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -87,6 +91,10 @@ const MODELS = [
   Counter,
   SupportTicket,
   SupportMessage,
+  CronSchedule,
+  CronExecution,
+  CronJobLog,
+  CronManagementAudit,
 ];
 
 export const clearDb = async (): Promise<void> => {
@@ -109,6 +117,13 @@ export const dropCollections = async (): Promise<void> => {
 export const ensureSupportIndexes = async (): Promise<void> => {
   await SupportMessage.syncIndexes();
   await SupportTicket.syncIndexes();
+};
+
+export const ensureCronIndexes = async (): Promise<void> => {
+  await CronSchedule.syncIndexes();
+  await CronExecution.syncIndexes();
+  await CronJobLog.syncIndexes();
+  await CronManagementAudit.syncIndexes();
 };
 
 export const createOrg = async (overrides: Record<string, any> = {}) =>

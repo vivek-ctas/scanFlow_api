@@ -8,6 +8,15 @@ export default defineConfig({
     env: {
       NODE_ENV: 'test',
       REDIS_URL: 'redis://localhost:6379/15',
+      CRONZIVO_API_KEY:
+        'test-global-key-0123456789abcdef0123456789abcdef',
+      CRONZIVO_API_KEY_SECONDARY:
+        'rotated-global-key-fedcba9876543210fedcba9876543210',
+      CRONZIVO_PRODUCT_CODE: 'SCANFLOW',
+      CRONZIVO_ENVIRONMENT: 'PRODUCTION',
+      CRONZIVO_ALLOWED_ORIGINS: 'https://panel.test',
+      CRONZIVO_MGMT_PREFIX: '/internal/cron',
+      CRONZIVO_RECONCILE_SEC: '5',
     },
     setupFiles: ['./tests/setup.ts'],
     fileParallelism: false,

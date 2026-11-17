@@ -15,6 +15,7 @@ import { mongoSanitize } from './middlewares/mongoSanitize.js';
 import { auth } from './middlewares/auth.js';
 import { requestContext } from './middlewares/request-context.js';
 import { apiRouter, PUBLIC_PATHS } from './routes/index.js';
+import { cronManagementRouter } from './cron/management/routes.js';
 import {
   errorConverter,
   errorHandler as errorHandlerMiddleware,
@@ -33,6 +34,15 @@ if (config.env !== 'test') {
 }
 
 app.use(helmet());
+
+/**
+ * CronZivo Cron Management API.
+ *
+ * Mounted before the global body parser, CORS and auth middleware: the
+ * management prefix owns its own 10 KB body limit, origin allowlist,
+ * rate limit, bearer-token auth and error envelope.
+ */
+app.use(config.cronzivo.mgmtPrefix, cronManagementRouter);
 
 app.use(
   express.json({
