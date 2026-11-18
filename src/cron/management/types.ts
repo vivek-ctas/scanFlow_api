@@ -40,7 +40,13 @@ export interface CronJobDefinition {
 export interface ManagementAuditContext {
   requestId: string;
   ip: string;
-  actor?: string;
+  /** `jti` of the verified management token (never the token itself). */
+  tokenJti?: string | null;
+  userAgent?: string | null;
+  /** Actor source; defaults to `cronzivo-panel`. */
+  source?: string;
+  /** Set for bulk commands so every affected job shares one id. */
+  bulkId?: string | null;
 }
 
 export interface ScheduleView {
@@ -86,11 +92,15 @@ export interface ExecutionView {
   started_at: string;
   finished_at: string | null;
   duration_ms: number | null;
+  /** Sanitized failure message (canonical field). */
+  error_message: string | null;
+  /** @deprecated compatibility projection of `error_message` for older panels. */
   error: { message: string } | null;
   summary: string | null;
 }
 
 export interface LogView {
+  seq: number;
   ts: string;
   level: string;
   message: string;
@@ -98,16 +108,24 @@ export interface LogView {
   data: Record<string, unknown> | null;
 }
 
+export interface AuditActorView {
+  source: string;
+  token_jti: string | null;
+  ip: string | null;
+  user_agent: string | null;
+}
+
 export interface AuditView {
   id: string;
   job_id: string;
   command: string;
-  actor: string;
+  actor: AuditActorView;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
+  bulk_id: string | null;
   request_id: string;
-  ip: string;
-  outcome: 'SUCCESS' | 'FAILED';
+  outcome: 'SUCCESS' | 'FAILED' | 'REJECTED';
+  error_code: string | null;
   ts: string;
 }
 

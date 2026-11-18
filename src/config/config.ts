@@ -242,6 +242,16 @@ const envVarsSchema = Joi.object()
       .min(0)
       .default(30)
       .description('execution history TTL in days; 0 disables the TTL index'),
+    CRONZIVO_LOG_RETENTION_DAYS: Joi.number()
+      .integer()
+      .min(0)
+      .default(30)
+      .description('job log TTL in days; 0 disables the TTL index'),
+    CRONZIVO_AUDIT_RETENTION_DAYS: Joi.number()
+      .integer()
+      .min(0)
+      .default(90)
+      .description('management audit TTL in days; 0 disables the TTL index'),
     CRONZIVO_RECONCILE_SEC: Joi.number()
       .integer()
       .min(5)
@@ -410,6 +420,8 @@ export const config = {
     mgmtPrefix: normalizedCronzivoPrefix,
     bulkRunConcurrency: envVars.CRONZIVO_BULK_RUN_CONCURRENCY,
     executionRetentionDays: envVars.CRONZIVO_EXECUTION_RETENTION_DAYS,
+    logRetentionDays: envVars.CRONZIVO_LOG_RETENTION_DAYS,
+    auditRetentionDays: envVars.CRONZIVO_AUDIT_RETENTION_DAYS,
     reconcileSec: envVars.CRONZIVO_RECONCILE_SEC,
   },
 };

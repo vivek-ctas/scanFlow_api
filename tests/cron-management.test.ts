@@ -25,13 +25,13 @@ const JOB_IDS = [
 ];
 
 const VECTOR_1 =
-  'czm1.eyJ2IjoxLCJhdWQiOiJTQ0FORkxPV3xQUk9EVUNUSU9OIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDAzMDAsImp0aSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSJ9.BeqohiFZBCn1GvIDklZ3PM_6rTj1b5sLatboS3r412E';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjcm9ueml2byIsImF1ZCI6IlNDQU5GTE9XfFBST0RVQ1RJT04iLCJzdWIiOiJjcm9ueml2by1wYW5lbCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxNzAwMDAwMzAwLCJqdGkiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEifQ.h6EGsM7COFHXOKYS59cUwqDl37uvdMUJDftcjJPIyKY';
 const VECTOR_2 =
-  'czm1.eyJ2IjoxLCJhdWQiOiJTQ0FORkxPV3xTVEFHSU5HIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDA5MDAsImp0aSI6IjIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMiJ9.rs8WGq6FFKGMqYUSB2bg1PhyQ28dVC_49nlFSyQtWoI';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjcm9ueml2byIsImF1ZCI6IlNDQU5GTE9XfFNUQUdJTkciLCJzdWIiOiJjcm9ueml2by1wYW5lbCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxNzAwMDAwOTAwLCJqdGkiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIifQ.ANdhZF4WM59PhZIqk0oakEzSo1k5H0TP-sd7I8aezEM';
 const VECTOR_3 =
-  'czm1.eyJ2IjoxLCJhdWQiOiJERU1PX1BST0RVQ1R8REVWRUxPUE1FTlQiLCJpYXQiOjE3MzU2ODk2MDAsImV4cCI6MTczNTY4OTkwMCwianRpIjoiMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIn0.V-9qVIDdcA9EHSJ5f-CqBLXIplsJwYMAbKI8_BV_z6s';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjcm9ueml2byIsImF1ZCI6IkRFTU9fUFJPRFVDVHxERVZFTE9QTUVOVCIsInN1YiI6ImNyb256aXZvLXBhbmVsIiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjE3MzU2ODk5MDAsImp0aSI6IjMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyJ9.aj2N2RBg85EEvFsF_TvFqS26vTxIrDBiwQjZhPjqFeY';
 const VECTOR_4 =
-  'czm1.eyJ2IjoxLCJhdWQiOiJTQ0FORkxPV3xQUk9EVUNUSU9OIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDAzMDAsImp0aSI6IjQ0NDQ0NDQ0LTQ0NDQtNDQ0NC04NDQ0LTQ0NDQ0NDQ0NDQ0NCJ9.hg267HUS25swDcquOmFHK3HgM9YFKNvfPLWJD13lO2U';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjcm9ueml2byIsImF1ZCI6IlNDQU5GTE9XfFBST0RVQ1RJT04iLCJzdWIiOiJjcm9ueml2by1wYW5lbCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxNzAwMDAwMzAwLCJqdGkiOiI0NDQ0NDQ0NC00NDQ0LTQ0NDQtODQ0NC00NDQ0NDQ0NDQ0NDQifQ.6y7G8klcmk2Gb03lTnYfXp0BEh9KN56fDCSuFDy2Bmk';
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -41,19 +41,23 @@ const mint = (options: {
   ttl?: number;
   iat?: number;
   jti?: string;
-  version?: number;
+  alg?: string;
 } = {}): string => {
   const key = options.key ?? K1;
   const aud = options.aud ?? AUD;
   const iat = options.iat ?? nowSec();
+  const header = { alg: options.alg ?? 'HS256', typ: 'JWT' };
   const payload = {
-    v: options.version ?? 1,
+    iss: 'cronzivo',
     aud,
+    sub: 'cronzivo-panel',
     iat,
     exp: iat + (options.ttl ?? 300),
     jti: options.jti ?? crypto.randomUUID(),
   };
-  const signingInput = `czm1.${Buffer.from(JSON.stringify(payload)).toString('base64url')}`;
+  const signingInput = `${Buffer.from(JSON.stringify(header)).toString('base64url')}.${Buffer.from(
+    JSON.stringify(payload),
+  ).toString('base64url')}`;
   const signature = crypto
     .createHmac('sha256', deriveManagementKey(key, aud))
     .update(signingInput)
@@ -146,7 +150,7 @@ describe('management token verification (frozen vectors)', () => {
         token: VECTOR_1,
         keys: [K1],
         expectedAud: AUD,
-        nowSec: 1700000301,
+        nowSec: 1700000400,
       }),
     ).toEqual({ ok: false, reason: 'expired' });
   });
@@ -183,7 +187,7 @@ describe('management token verification (frozen vectors)', () => {
     ).toEqual({ ok: false, reason: 'signature' });
   });
 
-  it('rejects a future iat, excessive TTL, bad version and bad prefix', () => {
+  it('rejects a future iat, excessive TTL and non-HS256 algorithm', () => {
     const future = mint({ iat: nowSec() + 120 });
     expect(
       verifyManagementToken({
@@ -202,35 +206,31 @@ describe('management token verification (frozen vectors)', () => {
       }),
     ).toEqual({ ok: false, reason: 'ttl' });
 
-    const badVersion = mint({ version: 2 });
+    const noAlg = mint({ alg: 'none' });
     expect(
       verifyManagementToken({
-        token: badVersion,
+        token: noAlg,
         keys: [K1],
         expectedAud: AUD,
       }),
-    ).toEqual({ ok: false, reason: 'version' });
-
-    const badPrefix = VECTOR_1.replace('czm1.', 'czm2.');
-    expect(
-      verifyManagementToken({
-        token: badPrefix,
-        keys: [K1],
-        expectedAud: AUD,
-        nowSec: 1700000000,
-      }),
-    ).toEqual({ ok: false, reason: 'format' });
+    ).toEqual({ ok: false, reason: 'alg' });
   });
 
   it('rejects an audience mismatch even when the HMAC matches', () => {
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'HS256', typ: 'JWT' }),
+    ).toString('base64url');
     const payload = {
-      v: 1,
+      iss: 'cronzivo',
       aud: 'OTHER|PRODUCTION',
+      sub: 'cronzivo-panel',
       iat: nowSec(),
       exp: nowSec() + 300,
       jti: crypto.randomUUID(),
     };
-    const signingInput = `czm1.${Buffer.from(JSON.stringify(payload)).toString('base64url')}`;
+    const signingInput = `${header}.${Buffer.from(
+      JSON.stringify(payload),
+    ).toString('base64url')}`;
     const signature = crypto
       .createHmac('sha256', deriveManagementKey(K1, AUD))
       .update(signingInput)
@@ -508,6 +508,9 @@ describe('management run', () => {
       trigger: 'MANUAL',
       triggered_by: 'cronzivo-panel',
       status: 'SUCCESS',
+      error_message: null,
+      // Deprecated compatibility projection of `error_message`.
+      error: null,
     });
     expect(typeof executions.body.data.items[0].finished_at).toBe('string');
 
@@ -519,6 +522,12 @@ describe('management run', () => {
     expect(logs.body.data.items.map((entry: any) => entry.message)).toEqual(
       expect.arrayContaining(['job started', 'job completed']),
     );
+    // Logs carry a per-execution sequence; listing is newest-first.
+    const seqs = logs.body.data.items.map((entry: any) => entry.seq);
+    expect(seqs.every((seq: number) => Number.isInteger(seq) && seq > 0)).toBe(
+      true,
+    );
+    expect([...seqs].sort((a: number, b: number) => b - a)).toEqual(seqs);
   });
 
   it('rejects a non-empty run body', async () => {
@@ -793,46 +802,200 @@ describe('management history', () => {
     expect(invalidStatus.status).toBe(400);
   });
 
-  it('records successful and failed commands with the request id', async () => {
+  it('records successful commands with an actor object and the request id', async () => {
     await seed();
 
     const stop = await request(app)
       .post(`${PREFIX}/jobs/usage_purge/stop`)
-      .set(bearer())
-      .set('X-Request-Id', 'audit-stop-1');
+      .set(bearer(mint({ jti: 'audit-jti-1' })))
+      .set('X-Request-Id', 'audit-stop-1')
+      .set('User-Agent', 'cronzivo-panel/test');
     expect(stop.status).toBe(200);
-
-    await patch('/jobs/usage_purge/schedule', {
-      expression: '*/5 * * * *',
-      timezone: 'UTC',
-      expected_version: 99,
-    });
 
     const audit = await get('/jobs/usage_purge/audit?limit=10');
     expect(audit.status).toBe(200);
 
     const stopEntry = audit.body.data.items.find(
-      (entry: any) => entry.command === 'stop',
+      (entry: any) => entry.command === 'STOP',
     );
     expect(stopEntry).toMatchObject({
       job_id: 'usage_purge',
-      actor: 'cronzivo-panel',
+      actor: {
+        source: 'cronzivo-panel',
+        token_jti: 'audit-jti-1',
+        user_agent: 'cronzivo-panel/test',
+      },
       request_id: 'audit-stop-1',
       outcome: 'SUCCESS',
+      error_code: null,
+      bulk_id: null,
     });
+    expect(typeof stopEntry.actor.ip).toBe('string');
     expect(stopEntry.before).toMatchObject({ enabled: true });
     expect(stopEntry.after).toMatchObject({ enabled: false });
-
-    const failed = audit.body.data.items.find(
-      (entry: any) => entry.command === 'schedule.update',
-    );
-    expect(failed).toMatchObject({ outcome: 'FAILED' });
 
     const stored = await CronManagementAudit.findOne({
       request_id: 'audit-stop-1',
     }).lean();
-    expect(stored?.actor).toBe('cronzivo-panel');
-    expect(stored?.ip).toBeTruthy();
+    expect(stored?.actor).toMatchObject({
+      source: 'cronzivo-panel',
+      token_jti: 'audit-jti-1',
+    });
+    expect(stored?.actor.ip).toBeTruthy();
+    // The token itself must never be persisted.
+    expect(JSON.stringify(stored)).not.toContain('eyJ');
+  });
+
+  it('records REJECTED outcomes with an error code', async () => {
+    await seed();
+
+    const missing = await post('/jobs/does_not_exist/stop');
+    expect(missing.status).toBe(404);
+
+    // Semantic rejection (invalid timezone) is audited, not just schema noise.
+    const invalidTz = await patch('/jobs/usage_purge/schedule', {
+      expression: '*/5 * * * *',
+      timezone: 'Mars/Olympus',
+    });
+    expect(invalidTz.status).toBe(400);
+    expect(invalidTz.body.error.code).toBe('INVALID_TIMEZONE');
+
+    const conflict = await patch('/jobs/usage_purge/schedule', {
+      expression: '*/5 * * * *',
+      timezone: 'UTC',
+      expected_version: 99,
+    });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error.code).toBe('VERSION_CONFLICT');
+
+    await CronSchedule.updateOne(
+      { job_id: 'usage_purge' },
+      {
+        $set: {
+          lock_execution_id: 'held-by-other-process',
+          lock_expires_at: new Date(Date.now() + 60_000),
+        },
+      },
+    );
+    const alreadyRunning = await post('/jobs/usage_purge/run');
+    expect(alreadyRunning.status).toBe(409);
+    expect(alreadyRunning.body.error.code).toBe('JOB_ALREADY_RUNNING');
+    await CronSchedule.updateOne(
+      { job_id: 'usage_purge' },
+      { $set: { lock_execution_id: null, lock_expires_at: null } },
+    );
+
+    const rejected = await get('/audit?outcome=REJECTED&limit=20');
+    expect(rejected.status).toBe(200);
+    expect(rejected.body.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          job_id: 'does_not_exist',
+          command: 'STOP',
+          outcome: 'REJECTED',
+          error_code: 'JOB_NOT_FOUND',
+        }),
+        expect.objectContaining({
+          job_id: 'usage_purge',
+          command: 'SCHEDULE_UPDATE',
+          outcome: 'REJECTED',
+          error_code: 'INVALID_TIMEZONE',
+        }),
+        expect.objectContaining({
+          job_id: 'usage_purge',
+          command: 'SCHEDULE_UPDATE',
+          outcome: 'REJECTED',
+          error_code: 'VERSION_CONFLICT',
+        }),
+        expect.objectContaining({
+          job_id: 'usage_purge',
+          command: 'RUN',
+          outcome: 'REJECTED',
+          error_code: 'JOB_ALREADY_RUNNING',
+        }),
+      ]),
+    );
+
+    // Successful rows are excluded by the outcome filter.
+    expect(
+      rejected.body.data.items.every(
+        (entry: any) => entry.outcome === 'REJECTED',
+      ),
+    ).toBe(true);
+    expect(
+      rejected.body.data.items.some((entry: any) => entry.outcome === 'SUCCESS'),
+    ).toBe(false);
+  });
+
+  it('serves the environment-level audit feed with filters', async () => {
+    await seed();
+
+    await post('/jobs/usage_purge/start');
+    await post('/jobs/support_auto_close/stop');
+
+    const all = await get('/audit?limit=50');
+    expect(all.status).toBe(200);
+    expect(new Set(all.body.data.items.map((e: any) => e.job_id))).toEqual(
+      new Set(['usage_purge', 'support_auto_close']),
+    );
+
+    const byJob = await get('/audit?job_id=usage_purge&limit=50');
+    expect(byJob.status).toBe(200);
+    expect(byJob.body.data.items).toHaveLength(1);
+    expect(byJob.body.data.items[0].command).toBe('START');
+
+    const byCommand = await get('/audit?command=STOP&limit=50');
+    expect(byCommand.status).toBe(200);
+    expect(byCommand.body.data.items).toHaveLength(1);
+    expect(byCommand.body.data.items[0].job_id).toBe('support_auto_close');
+
+    const from = new Date(Date.now() - 60_000).toISOString();
+    const to = new Date(Date.now() + 60_000).toISOString();
+    const inRange = await get(
+      `/audit?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    );
+    expect(inRange.status).toBe(200);
+    expect(inRange.body.data.items).toHaveLength(2);
+
+    const outOfRange = await get(
+      `/audit?to=${encodeURIComponent(
+        new Date(Date.now() - 86_400_000).toISOString(),
+      )}`,
+    );
+    expect(outOfRange.status).toBe(200);
+    expect(outOfRange.body.data.items).toHaveLength(0);
+
+    const badOutcome = await get('/audit?outcome=MAYBE');
+    expect(badOutcome.status).toBe(400);
+    expect(badOutcome.body.error.code).toBe('VALIDATION_ERROR');
+
+    const badRange = await get(
+      `/audit?from=${encodeURIComponent(to)}&to=${encodeURIComponent(from)}`,
+    );
+    expect(badRange.status).toBe(400);
+  });
+
+  it('tags every command in one bulk request with a shared bulk_id', async () => {
+    await seed();
+
+    const stopped = await post('/bulk/stop', { confirm: true });
+    expect(stopped.status).toBe(200);
+
+    const audit = await get('/audit?command=BULK_STOP&limit=50');
+    expect(audit.status).toBe(200);
+    expect(audit.body.data.items).toHaveLength(4);
+
+    const bulkIds = new Set(audit.body.data.items.map((e: any) => e.bulk_id));
+    expect(bulkIds.size).toBe(1);
+    const [bulkId] = [...bulkIds];
+    expect(bulkId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(
+      audit.body.data.items.every(
+        (e: any) => e.command === 'BULK_STOP' && e.outcome === 'SUCCESS',
+      ),
+    ).toBe(true);
   });
 });
 

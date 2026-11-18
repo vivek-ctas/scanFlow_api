@@ -31,7 +31,10 @@ export const sanitizeText = (value: unknown, max = 500): string => {
         ? value
         : String(value ?? '');
   return raw
-    .replace(/czm1\.[A-Za-z0-9_.-]+/g, '[redacted-token]')
+    .replace(
+      /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+      '[redacted-token]',
+    )
     .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
     .replace(/\s+/g, ' ')
     .trim()
@@ -79,20 +82,28 @@ export const serializeExecutionSummary = (row: any): ExecutionSummaryView => ({
   duration_ms: row.duration_ms ?? null,
 });
 
-export const serializeExecution = (row: any): ExecutionView => ({
-  execution_id: String(row.execution_id),
-  job_id: String(row.job_id),
-  trigger: String(row.trigger),
-  triggered_by: String(row.triggered_by),
-  status: String(row.status),
-  started_at: toIso(row.started_at) as string,
-  finished_at: toIso(row.finished_at),
-  duration_ms: row.duration_ms ?? null,
-  error: row.error?.message ? { message: String(row.error.message) } : null,
-  summary: row.summary ?? null,
-});
+export const serializeExecution = (row: any): ExecutionView => {
+  // `error.message` is the legacy shape; new rows store `error_message`.
+  const errorMessage =
+    row.error_message ?? row.error?.message ?? row.error ?? null;
+  return {
+    execution_id: String(row.execution_id),
+    job_id: String(row.job_id),
+    trigger: String(row.trigger),
+    triggered_by: String(row.triggered_by),
+    status: String(row.status),
+    started_at: toIso(row.started_at) as string,
+    finished_at: toIso(row.finished_at),
+    duration_ms: row.duration_ms ?? null,
+    error_message: errorMessage ? String(errorMessage) : null,
+    // Kept for older panels; `error_message` is canonical.
+    error: errorMessage ? { message: String(errorMessage) } : null,
+    summary: row.summary ?? null,
+  };
+};
 
 export const serializeLog = (row: any): LogView => ({
+  seq: Number(row.seq ?? 0),
   ts: toIso(row.ts) as string,
   level: String(row.level),
   message: String(row.message),
@@ -100,18 +111,30 @@ export const serializeLog = (row: any): LogView => ({
   data: row.data ?? null,
 });
 
-export const serializeAudit = (row: any): AuditView => ({
-  id: String(row._id),
-  job_id: String(row.job_id),
-  command: String(row.command),
-  actor: String(row.actor),
-  before: row.before ?? null,
-  after: row.after ?? null,
-  request_id: String(row.request_id),
-  ip: String(row.ip ?? ''),
-  outcome: row.outcome,
-  ts: toIso(row.ts) as string,
-});
+export const serializeAudit = (row: any): AuditView => {
+  // Rows written before the actor-object migration stored `actor` as a string
+  // and `ip` at the top level; normalise both shapes on read.
+  const legacyActor =
+    typeof row.actor === 'string' ? row.actor : row.actor?.source;
+  return {
+    id: String(row._id),
+    job_id: String(row.job_id),
+    command: String(row.command),
+    actor: {
+      source: legacyActor ? String(legacyActor) : 'cronzivo-panel',
+      token_jti: row.actor?.token_jti ? String(row.actor.token_jti) : null,
+      ip: row.actor?.ip ? String(row.actor.ip) : row.ip ? String(row.ip) : null,
+      user_agent: row.actor?.user_agent ? String(row.actor.user_agent) : null,
+    },
+    before: row.before ?? null,
+    after: row.after ?? null,
+    bulk_id: row.bulk_id ? String(row.bulk_id) : null,
+    request_id: String(row.request_id),
+    outcome: row.outcome,
+    error_code: row.error_code ? String(row.error_code) : null,
+    ts: toIso(row.ts) as string,
+  };
+};
 
 export const createExecution = async (input: {
   jobId: string;
@@ -131,7 +154,7 @@ export const createExecution = async (input: {
     started_at: now,
     finished_at: input.status === 'SKIPPED' ? now : null,
     duration_ms: input.status === 'SKIPPED' ? 0 : null,
-    error: null,
+    error_message: null,
     summary: null,
   });
   return { row, executionId };
@@ -157,8 +180,8 @@ export const finishExecution = async (input: {
         finished_at: finishedAt,
         duration_ms: duration,
         summary: input.summary ? sanitizeText(input.summary, 500) : null,
-        error: input.errorMessage
-          ? { message: sanitizeText(input.errorMessage, 500) }
+        error_message: input.errorMessage
+          ? sanitizeText(input.errorMessage, 500)
           : null,
       },
     },
@@ -181,7 +204,7 @@ export const skipExecution = async (input: {
     started_at: now,
     finished_at: now,
     duration_ms: 0,
-    error: null,
+    error_message: null,
     summary: sanitizeText(input.summary, 500),
   });
 };
@@ -209,10 +232,18 @@ export const listExecutions = async (input: {
   cursor?: string;
   status?: string;
   trigger?: string;
+  from?: Date;
+  to?: Date;
 }): Promise<CollectionView<ExecutionView>> => {
   const query: Record<string, unknown> = { job_id: input.jobId };
   if (input.status) query.status = input.status;
   if (input.trigger) query.trigger = input.trigger;
+  if (input.from || input.to) {
+    const range: Record<string, Date> = {};
+    if (input.from) range.$gte = input.from;
+    if (input.to) range.$lte = input.to;
+    query.started_at = range;
+  }
 
   if (input.cursor) {
     const parts = decodeCursor(input.cursor);
@@ -255,9 +286,22 @@ export const writeLog = async (input: {
   message: string;
   data?: Record<string, unknown> | null;
 }) => {
+  let seq = 0;
+  if (input.executionId) {
+    const last = await CronJobLog.findOne({
+      execution_id: input.executionId,
+    })
+      .sort({ seq: -1 })
+      .select('seq')
+      .lean();
+    seq = Number((last as any)?.seq ?? 0) + 1;
+    // Cap stored lines per execution (contract: ~500).
+    if (seq > 500) return;
+  }
   await CronJobLog.create({
     job_id: input.jobId,
     execution_id: input.executionId ?? null,
+    seq,
     level: input.level,
     message: sanitizeText(input.message, 2000),
     data: input.data ?? null,
@@ -313,32 +357,51 @@ export const listLogs = async (input: {
 export const writeAudit = async (input: {
   jobId: string;
   command: string;
-  outcome: 'SUCCESS' | 'FAILED';
+  outcome: 'SUCCESS' | 'FAILED' | 'REJECTED';
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
+  errorCode?: string | null;
+  bulkId?: string | null;
   context: ManagementAuditContext;
 }) => {
   await CronManagementAudit.create({
     job_id: input.jobId,
     command: input.command,
-    actor: input.context.actor ?? 'cronzivo-panel',
+    actor: {
+      source: input.context.source ?? 'cronzivo-panel',
+      token_jti: input.context.tokenJti ?? null,
+      ip: input.context.ip || null,
+      user_agent: input.context.userAgent ?? null,
+    },
     before: input.before ?? null,
     after: input.after ?? null,
+    bulk_id: input.bulkId ?? input.context.bulkId ?? null,
     request_id: input.context.requestId,
-    ip: input.context.ip || null,
     outcome: input.outcome,
+    error_code: input.errorCode ?? null,
     ts: new Date(),
   });
 };
 
 export const listAudit = async (input: {
-  jobId: string;
+  jobId?: string;
   limit: number;
   cursor?: string;
   command?: string;
+  outcome?: string;
+  from?: Date;
+  to?: Date;
 }): Promise<CollectionView<AuditView>> => {
-  const query: Record<string, unknown> = { job_id: input.jobId };
+  const query: Record<string, unknown> = {};
+  if (input.jobId) query.job_id = input.jobId;
   if (input.command) query.command = input.command;
+  if (input.outcome) query.outcome = input.outcome;
+  if (input.from || input.to) {
+    const range: Record<string, Date> = {};
+    if (input.from) range.$gte = input.from;
+    if (input.to) range.$lte = input.to;
+    query.ts = range;
+  }
 
   if (input.cursor) {
     const parts = decodeCursor(input.cursor);

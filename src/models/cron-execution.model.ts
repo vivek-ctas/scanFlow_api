@@ -15,7 +15,8 @@ export interface ICronExecution extends Document {
   started_at: Date;
   finished_at?: Date | null;
   duration_ms?: number | null;
-  error?: { message: string } | null;
+  /** Sanitized failure message; never a stack trace. */
+  error_message?: string | null;
   summary?: string | null;
   created_at: Date;
   updated_at: Date;
@@ -44,13 +45,7 @@ const cronExecutionSchema = new Schema<ICronExecution>(
     started_at: { type: Date, required: true },
     finished_at: { type: Date, default: null },
     duration_ms: { type: Number, default: null },
-    error: {
-      type: new Schema(
-        { message: { type: String, required: true } },
-        { _id: false },
-      ),
-      default: null,
-    },
+    error_message: { type: String, default: null, trim: true, maxlength: 500 },
     summary: { type: String, default: null, trim: true },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } },

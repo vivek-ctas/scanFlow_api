@@ -3,21 +3,23 @@ import config from '../../config/config.js';
 import { logger } from '../../config/logger.js';
 
 /**
- * CronZivo management token v1 verifier.
+ * CronZivo management token verifier — standard JWT (HS256).
  *
- * This is a byte-for-byte implementation of the frozen specification in
- * `cronzivo_api/docs/management-token.md`. It is used by the product and by
- * tests/conformance; do not change constants without a contract version bump.
+ * Mirrors the normative specification in `cronzivo_api/docs/management-token.md`.
+ * The algorithm is pinned to HS256; `none` and every other alg are rejected.
+ * Changing the derivation constants requires a contract version bump.
  */
-export const MGMT_TOKEN_PREFIX = 'czm1.';
+export const MGMT_TOKEN_ALG = 'HS256';
+export const MGMT_TOKEN_ISSUER = 'cronzivo';
+export const MGMT_TOKEN_SUBJECT = 'cronzivo-panel';
 export const MGMT_TOKEN_SALT = 'cronzivo-mgmt-token-v1';
-export const MGMT_TOKEN_VERSION = 1;
 export const MGMT_TOKEN_MAX_TTL_SEC = 900;
 export const MGMT_TOKEN_CLOCK_SKEW_SEC = 60;
 
 export interface ManagementTokenPayload {
-  v: number;
+  iss: string;
   aud: string;
+  sub: string;
   iat: number;
   exp: number;
   jti: string;
@@ -25,9 +27,10 @@ export interface ManagementTokenPayload {
 
 export type VerifyFailureReason =
   | 'format'
+  | 'alg'
   | 'signature'
-  | 'version'
   | 'audience'
+  | 'issuer'
   | 'claims'
   | 'expired'
   | 'iat_future'
@@ -67,17 +70,24 @@ export const verifyManagementToken = (options: {
   const now = options.nowSec ?? Math.floor(Date.now() / 1000);
 
   const parts = token.split('.');
-  if (parts.length !== 3 || `${parts[0]}.` !== MGMT_TOKEN_PREFIX) {
+  if (parts.length !== 3 || parts.some((part) => part === '')) {
     return { ok: false, reason: 'format' };
   }
 
-  const signingInput = `${parts[0]}.${parts[1]}`;
-  let received: Buffer;
+  let header: { alg?: unknown; typ?: unknown };
   try {
-    received = Buffer.from(parts[2] as string, 'base64url');
+    header = JSON.parse(
+      Buffer.from(parts[0] as string, 'base64url').toString('utf8'),
+    ) as { alg?: unknown; typ?: unknown };
   } catch {
     return { ok: false, reason: 'format' };
   }
+  if (!header || header.alg !== MGMT_TOKEN_ALG) {
+    return { ok: false, reason: 'alg' };
+  }
+
+  const signingInput = `${parts[0]}.${parts[1]}`;
+  const received = Buffer.from(parts[2] as string, 'base64url');
 
   let signatureOk = false;
   for (const key of keys) {
@@ -105,13 +115,15 @@ export const verifyManagementToken = (options: {
   if (!payload || typeof payload !== 'object') {
     return { ok: false, reason: 'format' };
   }
-  if (payload.v !== MGMT_TOKEN_VERSION) {
-    return { ok: false, reason: 'version' };
+  if (payload.iss !== MGMT_TOKEN_ISSUER) {
+    return { ok: false, reason: 'issuer' };
   }
   if (payload.aud !== expectedAud) {
     return { ok: false, reason: 'audience' };
   }
   if (
+    typeof payload.sub !== 'string' ||
+    payload.sub.length === 0 ||
     !Number.isInteger(payload.iat) ||
     !Number.isInteger(payload.exp) ||
     typeof payload.jti !== 'string' ||
@@ -119,7 +131,7 @@ export const verifyManagementToken = (options: {
   ) {
     return { ok: false, reason: 'claims' };
   }
-  if (payload.exp <= now) {
+  if (payload.exp + MGMT_TOKEN_CLOCK_SKEW_SEC <= now) {
     return { ok: false, reason: 'expired' };
   }
   if (payload.iat > now + MGMT_TOKEN_CLOCK_SKEW_SEC) {

@@ -308,9 +308,11 @@ export class CronManager {
   private async safeAudit(input: {
     jobId: string;
     command: string;
-    outcome: 'SUCCESS' | 'FAILED';
+    outcome: 'SUCCESS' | 'FAILED' | 'REJECTED';
     before?: Record<string, unknown> | null;
     after?: Record<string, unknown> | null;
+    errorCode?: string | null;
+    bulkId?: string | null;
     context: ManagementAuditContext;
   }): Promise<void> {
     try {
@@ -441,19 +443,27 @@ export class CronManager {
   async startJob(
     jobId: string,
     audit: ManagementAuditContext,
-    command = 'start',
+    command = 'START',
   ) {
     const job = findJob(jobId);
     if (!job) {
       await this.safeAudit({
         jobId,
         command,
-        outcome: 'FAILED',
+        outcome: 'REJECTED',
+        errorCode: 'JOB_NOT_FOUND',
         context: audit,
       });
       throw jobNotFound();
     }
     if (!job.capabilities.start) {
+      await this.safeAudit({
+        jobId,
+        command,
+        outcome: 'REJECTED',
+        errorCode: 'CAPABILITY_NOT_SUPPORTED',
+        context: audit,
+      });
       throw capabilityNotSupported();
     }
 
@@ -501,6 +511,7 @@ export class CronManager {
         jobId,
         command,
         outcome: 'FAILED',
+        errorCode: 'SCHEDULER_APPLY_FAILED',
         before,
         context: audit,
       });
@@ -534,19 +545,27 @@ export class CronManager {
   async stopJob(
     jobId: string,
     audit: ManagementAuditContext,
-    command = 'stop',
+    command = 'STOP',
   ) {
     const job = findJob(jobId);
     if (!job) {
       await this.safeAudit({
         jobId,
         command,
-        outcome: 'FAILED',
+        outcome: 'REJECTED',
+        errorCode: 'JOB_NOT_FOUND',
         context: audit,
       });
       throw jobNotFound();
     }
     if (!job.capabilities.stop) {
+      await this.safeAudit({
+        jobId,
+        command,
+        outcome: 'REJECTED',
+        errorCode: 'CAPABILITY_NOT_SUPPORTED',
+        context: audit,
+      });
       throw capabilityNotSupported();
     }
 
@@ -597,6 +616,7 @@ export class CronManager {
         jobId,
         command,
         outcome: 'FAILED',
+        errorCode: 'SCHEDULER_APPLY_FAILED',
         before,
         context: audit,
       });
@@ -628,19 +648,27 @@ export class CronManager {
   async runManual(
     jobId: string,
     audit: ManagementAuditContext,
-    command = 'run',
+    command = 'RUN',
   ) {
     const job = findJob(jobId);
     if (!job) {
       await this.safeAudit({
         jobId,
         command,
-        outcome: 'FAILED',
+        outcome: 'REJECTED',
+        errorCode: 'JOB_NOT_FOUND',
         context: audit,
       });
       throw jobNotFound();
     }
     if (!job.capabilities.run) {
+      await this.safeAudit({
+        jobId,
+        command,
+        outcome: 'REJECTED',
+        errorCode: 'JOB_NOT_RUNNABLE',
+        context: audit,
+      });
       throw new ManagementError(
         httpStatus.UNPROCESSABLE_ENTITY,
         'JOB_NOT_RUNNABLE',
@@ -653,7 +681,8 @@ export class CronManager {
       await this.safeAudit({
         jobId,
         command,
-        outcome: 'FAILED',
+        outcome: 'REJECTED',
+        errorCode: 'JOB_ALREADY_RUNNING',
         after: { code: 'JOB_ALREADY_RUNNING' },
         context: audit,
       });
@@ -670,7 +699,8 @@ export class CronManager {
       await this.safeAudit({
         jobId,
         command,
-        outcome: 'FAILED',
+        outcome: 'REJECTED',
+        errorCode: 'JOB_ALREADY_RUNNING',
         after: { code: 'JOB_ALREADY_RUNNING' },
         context: audit,
       });
@@ -747,13 +777,21 @@ export class CronManager {
     if (!job) {
       await this.safeAudit({
         jobId,
-        command: 'schedule.update',
-        outcome: 'FAILED',
+        command: 'SCHEDULE_UPDATE',
+        outcome: 'REJECTED',
+        errorCode: 'JOB_NOT_FOUND',
         context: audit,
       });
       throw jobNotFound();
     }
     if (!job.capabilities.update_schedule) {
+      await this.safeAudit({
+        jobId,
+        command: 'SCHEDULE_UPDATE',
+        outcome: 'REJECTED',
+        errorCode: 'CAPABILITY_NOT_SUPPORTED',
+        context: audit,
+      });
       throw capabilityNotSupported();
     }
 
@@ -761,13 +799,15 @@ export class CronManager {
     try {
       validated = assertValidSchedule(input.expression, input.timezone);
     } catch (error) {
+      const mapped = mapCronValidation(error);
       await this.safeAudit({
         jobId,
-        command: 'schedule.update',
-        outcome: 'FAILED',
+        command: 'SCHEDULE_UPDATE',
+        outcome: 'REJECTED',
+        errorCode: mapped.code,
         context: audit,
       });
-      throw mapCronValidation(error);
+      throw mapped;
     }
 
     if (input.dryRun) {
@@ -787,8 +827,9 @@ export class CronManager {
     ) {
       await this.safeAudit({
         jobId,
-        command: 'schedule.update',
-        outcome: 'FAILED',
+        command: 'SCHEDULE_UPDATE',
+        outcome: 'REJECTED',
+        errorCode: 'VERSION_CONFLICT',
         before,
         after: { code: 'VERSION_CONFLICT' },
         context: audit,
@@ -834,8 +875,9 @@ export class CronManager {
       );
       await this.safeAudit({
         jobId,
-        command: 'schedule.update',
+        command: 'SCHEDULE_UPDATE',
         outcome: 'FAILED',
+        errorCode: 'SCHEDULER_APPLY_FAILED',
         before,
         context: audit,
       });
@@ -851,7 +893,7 @@ export class CronManager {
 
     await this.safeAudit({
       jobId,
-      command: 'schedule.update',
+      command: 'SCHEDULE_UPDATE',
       outcome: 'SUCCESS',
       before,
       after: {
@@ -870,13 +912,21 @@ export class CronManager {
     if (!job) {
       await this.safeAudit({
         jobId,
-        command: 'schedule.reset',
-        outcome: 'FAILED',
+        command: 'SCHEDULE_UPDATE',
+        outcome: 'REJECTED',
+        errorCode: 'JOB_NOT_FOUND',
         context: audit,
       });
       throw jobNotFound();
     }
     if (!job.capabilities.update_schedule) {
+      await this.safeAudit({
+        jobId,
+        command: 'SCHEDULE_UPDATE',
+        outcome: 'REJECTED',
+        errorCode: 'CAPABILITY_NOT_SUPPORTED',
+        context: audit,
+      });
       throw capabilityNotSupported();
     }
 
@@ -917,8 +967,9 @@ export class CronManager {
       );
       await this.safeAudit({
         jobId,
-        command: 'schedule.reset',
+        command: 'SCHEDULE_UPDATE',
         outcome: 'FAILED',
+        errorCode: 'SCHEDULER_APPLY_FAILED',
         before,
         context: audit,
       });
@@ -931,7 +982,7 @@ export class CronManager {
 
     await this.safeAudit({
       jobId,
-      command: 'schedule.reset',
+      command: 'SCHEDULE_UPDATE',
       outcome: 'SUCCESS',
       before,
       after: {
@@ -987,10 +1038,11 @@ export class CronManager {
     audit: ManagementAuditContext;
   }): Promise<BulkResult> {
     const ids = this.resolveBulkIds(input.jobIds);
+    const audit = { ...input.audit, bulkId: newExecutionId() };
     const results: BulkItemResult[] = [];
     for (const jobId of ids) {
       try {
-        const result = await this.startJob(jobId, input.audit, 'bulk.start');
+        const result = await this.startJob(jobId, audit, 'BULK_START');
         results.push({
           job_id: jobId,
           ok: true,
@@ -1008,10 +1060,11 @@ export class CronManager {
     audit: ManagementAuditContext;
   }): Promise<BulkResult> {
     const ids = this.resolveBulkIds(input.jobIds);
+    const audit = { ...input.audit, bulkId: newExecutionId() };
     const results: BulkItemResult[] = [];
     for (const jobId of ids) {
       try {
-        const result = await this.stopJob(jobId, input.audit, 'bulk.stop');
+        const result = await this.stopJob(jobId, audit, 'BULK_STOP');
         results.push({
           job_id: jobId,
           ok: true,
@@ -1029,6 +1082,7 @@ export class CronManager {
     audit: ManagementAuditContext;
   }): Promise<BulkResult> {
     const ids = this.resolveBulkIds(input.jobIds);
+    const audit = { ...input.audit, bulkId: newExecutionId() };
     const results: BulkItemResult[] = [];
     let accepted = 0;
     const limit = config.cronzivo.bulkRunConcurrency;
@@ -1036,6 +1090,13 @@ export class CronManager {
     for (const jobId of ids) {
       const job = findJob(jobId);
       if (!job) {
+        await this.safeAudit({
+          jobId,
+          command: 'BULK_RUN',
+          outcome: 'REJECTED',
+          errorCode: 'JOB_NOT_FOUND',
+          context: audit,
+        });
         results.push({
           job_id: jobId,
           ok: false,
@@ -1045,6 +1106,13 @@ export class CronManager {
         continue;
       }
       if (!job.capabilities.run) {
+        await this.safeAudit({
+          jobId,
+          command: 'BULK_RUN',
+          outcome: 'REJECTED',
+          errorCode: 'JOB_NOT_RUNNABLE',
+          context: audit,
+        });
         results.push({
           job_id: jobId,
           ok: false,
@@ -1054,6 +1122,13 @@ export class CronManager {
         continue;
       }
       if (accepted >= limit) {
+        await this.safeAudit({
+          jobId,
+          command: 'BULK_RUN',
+          outcome: 'REJECTED',
+          errorCode: 'JOB_ALREADY_RUNNING',
+          context: audit,
+        });
         results.push({
           job_id: jobId,
           ok: false,
@@ -1063,7 +1138,7 @@ export class CronManager {
         continue;
       }
       try {
-        const run = await this.runManual(jobId, input.audit, 'bulk.run');
+        const run = await this.runManual(jobId, audit, 'BULK_RUN');
         accepted += 1;
         results.push({
           job_id: jobId,
@@ -1183,6 +1258,8 @@ export class CronManager {
       cursor?: string;
       status?: string;
       trigger?: string;
+      from?: Date;
+      to?: Date;
     },
   ): Promise<CollectionView<any>> {
     if (!findJob(jobId)) throw jobNotFound();
@@ -1196,12 +1273,17 @@ export class CronManager {
     if (options.trigger && !['SCHEDULED', 'MANUAL'].includes(options.trigger)) {
       throw validationError('Invalid trigger filter');
     }
+    if (options.from && options.to && options.from > options.to) {
+      throw validationError('from must be before to');
+    }
     return listExecutions({
       jobId,
       limit: options.limit,
       cursor: options.cursor,
       status,
       trigger: options.trigger,
+      from: options.from,
+      to: options.to,
     });
   }
 
@@ -1218,11 +1300,18 @@ export class CronManager {
     if (options.level && !['INFO', 'WARN', 'ERROR'].includes(options.level)) {
       throw validationError('Invalid level filter');
     }
+    // Contract default: the latest execution's logs when no id is supplied.
+    let executionId = options.executionId;
+    if (!executionId) {
+      const latest = await lastExecutionByJob([jobId]);
+      executionId = latest.get(jobId)?.execution_id ?? undefined;
+      if (!executionId) return { items: [], next_cursor: null };
+    }
     return listLogs({
       jobId,
       limit: options.limit,
       cursor: options.cursor,
-      executionId: options.executionId,
+      executionId,
       level: options.level,
     });
   }
@@ -1238,6 +1327,28 @@ export class CronManager {
       cursor: options.cursor,
       command: options.command,
     });
+  }
+
+  /** Environment-level audit feed (`GET /audit`), all jobs. */
+  async globalAudit(options: {
+    jobId?: string;
+    limit: number;
+    cursor?: string;
+    command?: string;
+    outcome?: string;
+    from?: Date;
+    to?: Date;
+  }): Promise<CollectionView<any>> {
+    if (
+      options.outcome &&
+      !['SUCCESS', 'FAILED', 'REJECTED'].includes(options.outcome)
+    ) {
+      throw validationError('Invalid outcome filter');
+    }
+    if (options.from && options.to && options.from > options.to) {
+      throw validationError('from must be before to');
+    }
+    return listAudit(options);
   }
 
   // ------------------------------------------------------------------- health
