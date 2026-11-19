@@ -45,5 +45,5 @@ cronScheduleSchema.plugin(toJSON);
 export const CronSchedule = mongoose.model<ICronSchedule>(
   'CronSchedule',
   cronScheduleSchema,
-  'cron_schedules',
+  'tbl_cron_schedules',
 );

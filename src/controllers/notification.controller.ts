@@ -1,9 +1,7 @@
-import httpStatus from 'http-status';
 import { Request, Response } from 'express';
 import { catchAsync } from '../utils/catchAsync.js';
 import { pick } from '../utils/pick.js';
 import * as notificationService from '../services/notification.service.js';
-import { createResponse } from '../services/common.service.js';
 
 export const listNotifications = catchAsync(
   async (req: Request, res: Response) => {
