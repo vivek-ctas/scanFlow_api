@@ -1,3 +1,4 @@
+import httpStatus from 'http-status';
 import { Router } from 'express';
 import { auth } from '../../middlewares/auth.js';
 import { validate } from '../../middlewares/validate.js';
@@ -26,7 +27,12 @@ router.post(
   controller.batchCreateScans,
 );
 
-router.get('/daily-usage', auth('manageScans'), controller.getDailyUsage);
+router.get('/daily-usage', (_req, res) => {
+  res.status(httpStatus.NOT_FOUND).json({
+    code: httpStatus.NOT_FOUND,
+    message: httpStatus[httpStatus.NOT_FOUND],
+  });
+});
 
 router.get(
   '/:scanId',

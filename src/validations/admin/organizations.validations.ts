@@ -18,6 +18,7 @@ export const createOrganization = {
       country_name: Joi.string().allow('', null).optional(),
       business_address: Joi.string().allow('', null).optional(),
       status: Joi.number().integer().valid(0, 1).optional().default(1),
+      daily_scan_limit: Joi.number().integer().min(0).optional().default(0),
       plan_id: Joi.string().custom(objectId).optional(),
       billing_cycle: Joi.string().valid('month', 'quarterly').optional(),
       start_date: Joi.date().optional().allow('', null),
@@ -28,6 +29,7 @@ export const createOrganization = {
       contact_number: Joi.string().allow('', null).optional(),
       country_name: Joi.string().allow('', null).optional(),
       status: Joi.number().integer().valid(0, 1).optional().default(1),
+      daily_scan_limit: Joi.number().integer().min(0).optional().default(0),
       admin_email: Joi.string().email().required(),
       admin_first_name: Joi.string().optional(),
       admin_last_name: Joi.string().optional(),
@@ -66,6 +68,7 @@ export const updateOrganization = {
       last_name: Joi.string().allow('', null).optional(),
       business_address: Joi.string().allow('', null).optional(),
       status: Joi.number().integer().valid(0, 1, 2).optional(),
+      daily_scan_limit: Joi.number().integer().min(0).optional(),
     })
     .min(1),
 };

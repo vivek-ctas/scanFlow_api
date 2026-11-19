@@ -12,8 +12,6 @@ import {
   releaseScanUsage,
   dailyUsageDayKey,
   nextDailyResetAt,
-  readActiveSubUsage,
-  readDailyUsageHash,
   type ReserveResult,
 } from '../quota.service.js';
 import { populateActiveSubCache } from '../subscription.service.js';
@@ -28,7 +26,6 @@ export interface DailyScanContext {
   dayKey: string;
   resetAt: string;
   timezone: string;
-  userId: string;
   now: Date;
 }
 
@@ -39,20 +36,14 @@ export interface ScanUsageRef {
   dailyApplied: boolean;
 }
 
-const buildDailyContext = (reqUser: any): DailyScanContext => {
+const buildDailyContext = (): DailyScanContext => {
   const now = new Date();
   return {
     dayKey: dailyUsageDayKey(now),
     resetAt: nextDailyResetAt(now).toISOString(),
     timezone: config.dailyLimit.timezone,
-    userId: String(reqUser?._id ?? ''),
     now,
   };
-};
-
-const operatorDailyCap = (reqUser: any): number => {
-  const value = Number(reqUser?.daily_scan_limit ?? 0);
-  return Number.isFinite(value) && value > 0 ? value : 0;
 };
 
 const recordReserveUsage = (
@@ -62,14 +53,13 @@ const recordReserveUsage = (
   if (!ref) return;
   switch (result.status) {
     case 'ok':
-      ref.used = result.userDaily;
-      ref.limit = result.userCap;
+      ref.used = result.orgDaily;
+      ref.limit = result.dailyLimit;
       ref.dailyApplied = result.dailyApplied;
       break;
     case 'organization_daily_exceeded':
-    case 'operator_daily_exceeded':
-      ref.used = result.userDaily;
-      ref.limit = result.userCap;
+      ref.used = result.orgDaily;
+      ref.limit = result.dailyLimit;
       ref.dailyApplied = true;
       break;
     default:
@@ -91,6 +81,7 @@ const recordReserveUsage = (
 export type PreResolvedScanOrg = {
   organizationId?: mongoose.Types.ObjectId | string;
   organizationVerified?: boolean;
+  dailyLimit?: number;
   dailyContext?: DailyScanContext;
   usageRef?: ScanUsageRef;
 };
@@ -103,12 +94,13 @@ export const createScan = async (
   const organizationId =
     preResolved?.organizationId ??
     resolveScanOrg(reqUser, userBody.organization_id);
-  if (!preResolved?.organizationVerified) {
-    await assertOrganizationActive(String(organizationId));
+  let dailyLimit = preResolved?.dailyLimit;
+  if (dailyLimit === undefined) {
+    const org = await assertOrganizationActive(String(organizationId));
+    dailyLimit = Number((org as any).daily_scan_limit ?? 0) || 0;
   }
 
-  const daily = preResolved?.dailyContext ?? buildDailyContext(reqUser);
-  const userCap = operatorDailyCap(reqUser);
+  const daily = preResolved?.dailyContext ?? buildDailyContext();
 
   const filter = {
     organization_id: organizationId,
@@ -119,8 +111,7 @@ export const createScan = async (
   // cache, not an error: fall back to Mongo exactly once, then retry once.
   const reserve = () =>
     reserveScanUsage(String(organizationId), {
-      userId: daily.userId,
-      userCap,
+      dailyLimit,
       dayKey: daily.dayKey,
       now: daily.now,
     });
@@ -177,23 +168,6 @@ export const createScan = async (
       { reset_at: daily.resetAt, timezone: daily.timezone },
     );
   }
-  if (reserved.status === 'operator_daily_exceeded') {
-    const existing = await Scan.findOne(filter);
-    if (existing) {
-      return createResponse(
-        httpStatus.OK,
-        'Scan already exists (duplicate ignored).',
-        { scan: existing, created: false },
-      );
-    }
-    throw new ApiError(
-      httpStatus.FORBIDDEN,
-      'FORBIDDEN_OPERATOR_DAILY_LIMIT_EXCEEDED',
-      true,
-      '',
-      { reset_at: daily.resetAt, timezone: daily.timezone },
-    );
-  }
   if (reserved.status === 'subscription_expired') {
     throw new ApiError(httpStatus.FORBIDDEN, 'SUBSCRIPTION_EXPIRED');
   }
@@ -203,7 +177,6 @@ export const createScan = async (
     await releaseScanUsage(
       String(organizationId),
       daily.dayKey,
-      daily.userId,
       reserved.dailyApplied,
     );
     return createResponse(
@@ -230,7 +203,6 @@ export const createScan = async (
     await releaseScanUsage(
       String(organizationId),
       daily.dayKey,
-      daily.userId,
       reserved.dailyApplied,
     );
     if (err && err.code === 11000) {
@@ -261,7 +233,6 @@ export type BatchScanItemStatus =
   | 'duplicate'
   | 'quota_exceeded'
   | 'daily_limit_exceeded'
-  | 'operator_daily_limit_exceeded'
   | 'no_active_subscription'
   | 'subscription_expired'
   | 'failed';
@@ -299,8 +270,6 @@ const toItemFailure = (err: unknown): BatchScanItemStatus => {
       return 'quota_exceeded';
     case 'FORBIDDEN_DAILY_LIMIT_EXCEEDED':
       return 'daily_limit_exceeded';
-    case 'FORBIDDEN_OPERATOR_DAILY_LIMIT_EXCEEDED':
-      return 'operator_daily_limit_exceeded';
     case 'NO_ACTIVE_SUBSCRIPTION':
       return 'no_active_subscription';
     case 'SUBSCRIPTION_EXPIRED':
@@ -311,13 +280,10 @@ const toItemFailure = (err: unknown): BatchScanItemStatus => {
 };
 
 const isLimitStatus = (status: BatchScanItemStatus): boolean =>
-  status === 'quota_exceeded' ||
-  status === 'daily_limit_exceeded' ||
-  status === 'operator_daily_limit_exceeded';
+  status === 'quota_exceeded' || status === 'daily_limit_exceeded';
 
 const isDailyStatus = (status: BatchScanItemStatus): boolean =>
-  status === 'daily_limit_exceeded' ||
-  status === 'operator_daily_limit_exceeded';
+  status === 'daily_limit_exceeded';
 
 /**
  * Submits many already-decoded scans in one request.
@@ -332,9 +298,9 @@ const isDailyStatus = (status: BatchScanItemStatus): boolean =>
  * so it runs once per batch instead of once per item. Resolution itself is
  * pure and cheap — it is the database round trip that costs.
  *
- * The business day and operator cap are computed once per request. Once an
- * item hits a limit (cycle or daily), the remaining items receive the same
- * status without another Redis call: the state cannot change within
+ * The business day and organization daily limit are computed once per request.
+ * Once an item hits a limit (cycle or daily), the remaining items receive the
+ * same status without another Redis call: the state cannot change within
  * milliseconds, so a blocked client costs one script call per batch.
  */
 export const batchCreateScans = async (
@@ -343,14 +309,16 @@ export const batchCreateScans = async (
 ) => {
   const organizationId = resolveScanOrg(reqUser, scans[0]?.organization_id);
   // Once per batch, not once per item — the whole point of batching.
-  await assertOrganizationActive(String(organizationId));
+  const organization = await assertOrganizationActive(String(organizationId));
+  const dailyLimit = Number((organization as any).daily_scan_limit ?? 0) || 0;
 
-  const dailyContext = buildDailyContext(reqUser);
+  const dailyContext = buildDailyContext();
   const usageRef: ScanUsageRef = { used: 0, limit: 0, dailyApplied: false };
 
   const preResolved: PreResolvedScanOrg = {
     organizationId,
     organizationVerified: true,
+    dailyLimit,
     dailyContext,
     usageRef,
   };
@@ -491,34 +459,4 @@ export const getScanById = async (scanId: string, reqUser: any) => {
     throw new ApiError(httpStatus.FORBIDDEN, 'Forbidden');
   }
   return scan;
-};
-
-/**
- * The caller's own daily position. Deliberately returns **no** organization
- * limit or total: `org_blocked` is the only organization-level signal, so an
- * operator learns that scanning is blocked without seeing confidential numbers.
- */
-export const getDailyUsage = async (reqUser: any) => {
-  const organizationId = String(resolveScanOrg(reqUser));
-  const now = new Date();
-  const dayKey = dailyUsageDayKey(now);
-  const userCap = operatorDailyCap(reqUser);
-
-  let cache = await readActiveSubUsage(organizationId);
-  if (!cache || cache.expiresAt <= now.getTime()) {
-    const hasActive = await populateActiveSubCache(organizationId);
-    cache = hasActive ? await readActiveSubUsage(organizationId) : null;
-  }
-
-  const dailyLimit = cache?.dailyLimit ?? 0;
-  const usage = await readDailyUsageHash(organizationId, dayKey);
-  const used = reqUser?._id ? (usage.users[String(reqUser._id)] ?? 0) : 0;
-
-  return createResponse(httpStatus.OK, 'Daily usage fetched successfully.', {
-    limit: userCap,
-    used,
-    org_blocked: dailyLimit > 0 && usage.total >= dailyLimit,
-    reset_at: nextDailyResetAt(now).toISOString(),
-    timezone: config.dailyLimit.timezone,
-  });
 };

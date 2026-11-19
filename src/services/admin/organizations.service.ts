@@ -21,6 +21,18 @@ import { resolveCountryName } from '../country-resolver.service.js';
 import { invalidateDashboardCache } from './dashboard.cache.js';
 import { systemLog } from '../../utils/system-log.js';
 
+const assertDailyLimitWithinScanLimit = (
+  dailyLimit: number,
+  scanLimit: number,
+): void => {
+  if (dailyLimit > 0 && scanLimit > 0 && dailyLimit > scanLimit) {
+    throw new ApiError(
+      httpStatus.BAD_REQUEST,
+      'Daily scan limit must be less than or equal to the plan scan limit',
+    );
+  }
+};
+
 export const createOrganization = async (
   orgBody: Record<string, any>,
   createdBy?: string,
@@ -74,6 +86,12 @@ export const createOrganization = async (
         planPriceErrorMessage(plan, orgBody.billing_cycle ?? 'month'),
       );
     }
+    const planScanLimit =
+      plan.features?.find((f) => f.features_name === 'scan')?.scan_limit ?? 0;
+    assertDailyLimitWithinScanLimit(
+      Number(orgBody.daily_scan_limit ?? 0),
+      planScanLimit,
+    );
   }
 
   const org = await Organization.create({
@@ -82,6 +100,7 @@ export const createOrganization = async (
     contact_number: orgBody.contact_number,
     country_name: canonicalCountry,
     status: orgBody.status ?? 1,
+    daily_scan_limit: Math.max(0, Number(orgBody.daily_scan_limit ?? 0)),
     created_by: createdBy ? toObjectId(createdBy) : null,
   });
 
@@ -235,6 +254,7 @@ const ORG_UPDATE_KEYS = [
   'contact_number',
   'country_name',
   'status',
+  'daily_scan_limit',
 ];
 
 const ADMIN_USER_CASCADE_KEYS = [
@@ -264,6 +284,25 @@ export const updateOrganizationById = async (
       if (canonical) normalized.country_name = canonical;
       else delete normalized.country_name;
     }
+  }
+  if (normalized.daily_scan_limit !== undefined) {
+    normalized.daily_scan_limit = Math.max(
+      0,
+      Number(normalized.daily_scan_limit) || 0,
+    );
+    const activeSub = await Subscription.findOne({
+      organization_id: org._id,
+      status: 'active',
+    })
+      .select('features')
+      .lean();
+    const activeScanLimit =
+      activeSub?.features?.find((f: any) => f.features_name === 'scan')
+        ?.scan_limit ?? 0;
+    assertDailyLimitWithinScanLimit(
+      normalized.daily_scan_limit,
+      activeScanLimit,
+    );
   }
   ORG_UPDATE_KEYS.forEach((key) => {
     if (normalized[key] !== undefined) {

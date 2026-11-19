@@ -14,7 +14,11 @@ import {
   nextDailyResetAt,
   readDailyOrgTotal,
 } from '../quota.service.js';
-import { dailyScanLimitOf } from '../../utils/plan-features.util.js';
+import {
+  buildDailyQuota,
+  suggestDailyLimit,
+  type DailyQuotaBlock,
+} from '../../utils/daily-quota.util.js';
 import {
   dashboardTimezone,
   dayBuckets,
@@ -45,15 +49,7 @@ export interface OrgSummary {
   };
 }
 
-export interface OrgQuotaDaily {
-  limit: number;
-  used: number;
-  remaining: number;
-  utilization_pct: number;
-  state: 'ok' | 'near_limit' | 'exhausted';
-  reset_at: string;
-  timezone: string;
-}
+export type OrgQuotaDaily = DailyQuotaBlock;
 
 export interface OrgQuota {
   state: 'ok' | 'near_limit' | 'exhausted' | 'expiring' | 'no_subscription';
@@ -72,6 +68,7 @@ export interface OrgQuota {
   source: 'live' | 'mirror';
   as_of: string;
   daily: OrgQuotaDaily | null;
+  suggested_limit?: number | null;
 }
 
 export const getOrgSummary = async (
@@ -144,12 +141,26 @@ export const getOrgSummary = async (
 
 const NEAR_LIMIT_PCT = config.dashboard.nearLimitPct;
 
-export const getOrgQuota = async (organizationId: string): Promise<OrgQuota> =>
-  buildOrgQuota(organizationId);
+export const getOrgQuota = async (
+  organizationId: string,
+  options: { includeSuggestion?: boolean } = {},
+): Promise<OrgQuota> => buildOrgQuota(organizationId, options);
 
-const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
+const buildOrgQuota = async (
+  organizationId: string,
+  options: { includeSuggestion?: boolean } = {},
+): Promise<OrgQuota> => {
   const orgId = new mongoose.Types.ObjectId(organizationId);
   const now = new Date();
+
+  const organization = await Organization.findById(orgId)
+    .select('daily_scan_limit')
+    .lean();
+  const dailyLimit = Number(organization?.daily_scan_limit ?? 0) || 0;
+  const dailyUsed =
+    dailyLimit > 0
+      ? await readDailyOrgTotal(organizationId, dailyUsageDayKey(now))
+      : 0;
 
   const subscription = await Subscription.findOne({
     organization_id: orgId,
@@ -175,7 +186,16 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
       next_plan_queued: false,
       source: 'mirror',
       as_of: now.toISOString(),
-      daily: null,
+      daily: buildDailyQuota({
+        limit: dailyLimit,
+        used: dailyUsed,
+        resetAt: nextDailyResetAt(now),
+        timezone: config.dailyLimit.timezone,
+        now,
+        alertThresholdPct: config.dailyLimit.alertThresholdPct,
+        ...(options.includeSuggestion ? { suggestedLimit: null } : {}),
+      }),
+      ...(options.includeSuggestion ? { suggested_limit: null } : {}),
     };
   }
 
@@ -186,7 +206,6 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
     subscription.features?.find((f: any) => f.features_name === 'scan')
       ?.scan_limit ?? 0;
   const unlimited = scanLimit === 0;
-  const dailyLimit = dailyScanLimitOf(subscription.features as any);
 
   const expiresAt = new Date(subscription.expires_at);
   const periodStart = new Date(subscription.started_at);
@@ -252,29 +271,25 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
     state = 'expiring';
   }
 
-  const dailyUsed =
-    dailyLimit > 0
-      ? await readDailyOrgTotal(organizationId, dailyUsageDayKey(now))
-      : 0;
-  const dailyUtilization =
-    dailyLimit > 0 ? Math.round((dailyUsed / dailyLimit) * 100) : 0;
-  const daily: OrgQuotaDaily | null =
-    dailyLimit > 0
-      ? {
-          limit: dailyLimit,
-          used: dailyUsed,
-          remaining: Math.max(0, dailyLimit - dailyUsed),
-          utilization_pct: dailyUtilization,
-          state:
-            dailyUsed >= dailyLimit
-              ? 'exhausted'
-              : dailyUtilization >= config.dailyLimit.alertThresholdPct
-                ? 'near_limit'
-                : 'ok',
-          reset_at: nextDailyResetAt(now).toISOString(),
-          timezone: config.dailyLimit.timezone,
-        }
-      : null;
+  const suggestedLimit = options.includeSuggestion
+    ? suggestDailyLimit(
+        scanLimit,
+        subscription.started_at,
+        subscription.expires_at,
+      )
+    : undefined;
+
+  const daily = buildDailyQuota({
+    limit: dailyLimit,
+    used: dailyUsed,
+    resetAt: nextDailyResetAt(now),
+    timezone: config.dailyLimit.timezone,
+    now,
+    alertThresholdPct: config.dailyLimit.alertThresholdPct,
+    ...(options.includeSuggestion
+      ? { suggestedLimit: suggestedLimit ?? null }
+      : {}),
+  });
 
   return {
     state,
@@ -293,6 +308,9 @@ const buildOrgQuota = async (organizationId: string): Promise<OrgQuota> => {
     source,
     as_of: now.toISOString(),
     daily,
+    ...(options.includeSuggestion
+      ? { suggested_limit: suggestedLimit ?? null }
+      : {}),
   };
 };
 
@@ -403,15 +421,10 @@ export const getOrgScanTrend = async (
     peakHour = { hour: hourAgg[0]._id, count: hourAgg[0].count };
   }
 
-  const subscription = await Subscription.findOne({
-    organization_id: orgId,
-    status: 'active',
-  })
-    .sort({ started_at: -1 })
+  const organization = await Organization.findById(orgId)
+    .select('daily_scan_limit')
     .lean();
-  const dailyLimit = subscription
-    ? dailyScanLimitOf(subscription.features as any)
-    : 0;
+  const dailyLimit = Number(organization?.daily_scan_limit ?? 0) || 0;
 
   return {
     range,

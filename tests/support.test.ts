@@ -42,6 +42,17 @@ vi.mock('../src/config/config.js', () => ({
       maxActivePerOrg: 25,
     },
     stripe: { secretKey: '', webhookSecret: '' },
+    cronzivo: {
+      apiKey: '',
+      apiKeySecondary: '',
+      productCode: 'SCANFLOW',
+      environment: 'PRODUCTION',
+      allowedOrigins: [],
+      mgmtPrefix: '/internal/cron',
+      bulkRunConcurrency: 1,
+      executionRetentionDays: 0,
+      reconcileSec: 30,
+    },
   },
 }));
 

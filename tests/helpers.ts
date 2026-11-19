@@ -20,6 +20,10 @@ import {
   Counter,
   SupportTicket,
   SupportMessage,
+  CronSchedule,
+  CronExecution,
+  CronJobLog,
+  CronManagementAudit,
 } from '../src/models/index.js';
 
 let connected = false;
@@ -87,6 +91,10 @@ const MODELS = [
   Counter,
   SupportTicket,
   SupportMessage,
+  CronSchedule,
+  CronExecution,
+  CronJobLog,
+  CronManagementAudit,
 ];
 
 export const clearDb = async (): Promise<void> => {
@@ -111,13 +119,19 @@ export const ensureSupportIndexes = async (): Promise<void> => {
   await SupportTicket.syncIndexes();
 };
 
+export const ensureCronIndexes = async (): Promise<void> => {
+  await CronSchedule.syncIndexes();
+  await CronExecution.syncIndexes();
+  await CronJobLog.syncIndexes();
+  await CronManagementAudit.syncIndexes();
+};
+
 export const createOrg = async (overrides: Record<string, any> = {}) =>
   Organization.create({ company_name: 'Test Org', status: 1, ...overrides });
 
 export const createPlan = async (overrides: Record<string, any> = {}) => {
-  const { scan_limit, daily_scan_limit, ...rest } = overrides;
+  const { scan_limit, ...rest } = overrides;
   const scanLimit = scan_limit ?? 100;
-  const dailyScanLimit = daily_scan_limit ?? 0;
   const billingCycle = rest.billing_cycle ?? 'month';
   const price = rest.price ?? 100;
   return Plan.create({
@@ -132,7 +146,6 @@ export const createPlan = async (overrides: Record<string, any> = {}) => {
       {
         features_name: 'scan',
         scan_limit: scanLimit,
-        daily_scan_limit: dailyScanLimit,
       },
     ],
     marketing_features: [],
@@ -164,7 +177,6 @@ export interface TestUserDoc {
   is_super_admin?: boolean;
   organization_id?: string;
   email: string;
-  daily_scan_limit: number;
 }
 
 export const createUser = async (
@@ -191,7 +203,6 @@ export const createUser = async (
       ? String(user.organization_id)
       : undefined,
     email: user.email,
-    daily_scan_limit: user.daily_scan_limit ?? 0,
   };
 };
 

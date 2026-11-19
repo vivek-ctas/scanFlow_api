@@ -14,7 +14,6 @@ import { writeActiveSubscriptionCache } from '../services/quota.service.js';
 import {
   computeQuarterlyPrice,
   scanLimitOf,
-  dailyScanLimitOf,
 } from '../utils/plan-features.util.js';
 
 const COMMON_PASSWORD = 'Scanflow@123';
@@ -277,7 +276,6 @@ const run = async () => {
         {
           features_name: 'scan',
           scan_limit: p.scan_limit,
-          daily_scan_limit: 0,
         },
       ],
       marketing_features: p.marketing_features,
@@ -455,7 +453,6 @@ const run = async () => {
       sub.expires_at,
       false,
       orgSeed.used,
-      dailyScanLimitOf(sub.features),
     );
 
     if (orgSeed.webhook_enabled) {

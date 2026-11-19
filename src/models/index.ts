@@ -20,3 +20,7 @@ export { SupportTicket } from './support-ticket.model.js';
 export { SupportMessage } from './support-message.model.js';
 export { Faq } from './support-faq.model.js';
 export { Notification } from './notification.model.js';
+export { CronSchedule } from './cron-schedule.model.js';
+export { CronExecution } from './cron-execution.model.js';
+export { CronJobLog } from './cron-job-log.model.js';
+export { CronManagementAudit } from './cron-management-audit.model.js';

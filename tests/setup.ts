@@ -5,6 +5,7 @@ import {
   clearDb,
   dropCollections,
   ensureSupportIndexes,
+  ensureCronIndexes,
 } from './helpers.js';
 import { getRedis } from '../src/queues/redis.js';
 import { SystemLog } from '../src/models/index.js';
@@ -17,6 +18,7 @@ beforeAll(async () => {
   // purge stale camelCase indexes from earlier schema versions
   await dropCollections();
   await ensureSupportIndexes();
+  await ensureCronIndexes();
 });
 
 afterEach(async () => {
