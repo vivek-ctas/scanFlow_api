@@ -53,5 +53,5 @@ cronJobLogSchema.plugin(toJSON);
 export const CronJobLog = mongoose.model<ICronJobLog>(
   'CronJobLog',
   cronJobLogSchema,
-  'cron_job_logs',
+  'tbl_cron_job_logs',
 );

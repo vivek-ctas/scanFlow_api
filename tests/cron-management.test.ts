@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import app from '../src/app.js';
 import config from '../src/config/config.js';
 import {
   CronExecution,
+  CronJobLog,
   CronSchedule,
   CronManagementAudit,
 } from '../src/models/index.js';
@@ -12,6 +13,11 @@ import {
   deriveManagementKey,
   verifyManagementToken,
 } from '../src/cron/management/token.js';
+import { cronManager } from '../src/cron/management/manager.js';
+
+beforeEach(async () => {
+  await cronManager.seedSchedules();
+});
 
 const PREFIX = '/internal/cron';
 const AUD = 'SCANFLOW|PRODUCTION';
@@ -35,14 +41,16 @@ const VECTOR_4 =
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 
-const mint = (options: {
-  key?: string;
-  aud?: string;
-  ttl?: number;
-  iat?: number;
-  jti?: string;
-  alg?: string;
-} = {}): string => {
+const mint = (
+  options: {
+    key?: string;
+    aud?: string;
+    ttl?: number;
+    iat?: number;
+    jti?: string;
+    alg?: string;
+  } = {},
+): string => {
   const key = options.key ?? K1;
   const aud = options.aud ?? AUD;
   const iat = options.iat ?? nowSec();
@@ -71,10 +79,16 @@ const get = (path: string, token = mint()) =>
   request(app).get(`${PREFIX}${path}`).set(bearer(token));
 
 const post = (path: string, body: unknown = {}, token = mint()) =>
-  request(app).post(`${PREFIX}${path}`).set(bearer(token)).send(body as any);
+  request(app)
+    .post(`${PREFIX}${path}`)
+    .set(bearer(token))
+    .send(body as any);
 
 const patch = (path: string, body: unknown, token = mint()) =>
-  request(app).patch(`${PREFIX}${path}`).set(bearer(token)).send(body as any);
+  request(app)
+    .patch(`${PREFIX}${path}`)
+    .set(bearer(token))
+    .send(body as any);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -257,10 +271,7 @@ describe('management API authentication', () => {
   });
 
   it('returns 401 for a wrong-audience or wrong-key token', async () => {
-    const wrongAud = await get(
-      '/health',
-      mint({ aud: 'SCANFLOW|STAGING' }),
-    );
+    const wrongAud = await get('/health', mint({ aud: 'SCANFLOW|STAGING' }));
     expect(wrongAud.status).toBe(401);
 
     const wrongKey = await get('/health', mint({ key: 'not-the-key' }));
@@ -385,11 +396,15 @@ describe('management discovery', () => {
       'audit',
       'cancel_running',
       'cron_seconds',
+      'executions_overview',
+      'stats',
     ]) {
       expect(typeof caps[key]).toBe('boolean');
     }
     expect(caps.cancel_running).toBe(false);
     expect(caps.cron_seconds).toBe(false);
+    expect(caps.executions_overview).toBe(false);
+    expect(caps.stats).toBe(false);
   });
 
   it('lists the four registry jobs in order with stable shapes', async () => {
@@ -475,9 +490,9 @@ describe('management start/stop', () => {
       scheduling: 'ACTIVE',
       changed: true,
     });
-    expect(
-      await CronExecution.countDocuments({ job_id: 'usage_purge' }),
-    ).toBe(0);
+    expect(await CronExecution.countDocuments({ job_id: 'usage_purge' })).toBe(
+      0,
+    );
   });
 });
 
@@ -725,7 +740,9 @@ describe('management bulk operations', () => {
     expect(started.body.data.summary.succeeded).toBe(4);
     const afterStart = await get('/jobs');
     expect(
-      afterStart.body.data.items.every((job: any) => job.scheduling === 'ACTIVE'),
+      afterStart.body.data.items.every(
+        (job: any) => job.scheduling === 'ACTIVE',
+      ),
     ).toBe(true);
   });
 
@@ -796,9 +813,7 @@ describe('management history', () => {
     );
     expect(invalidCursor.status).toBe(400);
 
-    const invalidStatus = await get(
-      '/jobs/usage_purge/executions?status=NOPE',
-    );
+    const invalidStatus = await get('/jobs/usage_purge/executions?status=NOPE');
     expect(invalidStatus.status).toBe(400);
   });
 
@@ -923,7 +938,9 @@ describe('management history', () => {
       ),
     ).toBe(true);
     expect(
-      rejected.body.data.items.some((entry: any) => entry.outcome === 'SUCCESS'),
+      rejected.body.data.items.some(
+        (entry: any) => entry.outcome === 'SUCCESS',
+      ),
     ).toBe(false);
   });
 
@@ -1005,5 +1022,55 @@ describe('management configuration', () => {
     expect(config.cronzivo.environment).toBe('PRODUCTION');
     expect(config.cronzivo.mgmtPrefix).toBe('/internal/cron');
     expect(config.cronzivo.allowedOrigins).toEqual(['https://panel.test']);
+  });
+
+  it('uses the tbl_ cron collection names', () => {
+    expect(CronSchedule.collection.name).toBe('tbl_cron_schedules');
+    expect(CronExecution.collection.name).toBe('tbl_cron_executions');
+    expect(CronJobLog.collection.name).toBe('tbl_cron_job_logs');
+    expect(CronManagementAudit.collection.name).toBe(
+      'tbl_cron_management_audits',
+    );
+  });
+});
+
+describe('scheduler boot and job listing', () => {
+  it('seeds on boot and keeps GET /jobs read-only', async () => {
+    const seedSpy = vi.spyOn(cronManager, 'seedSchedules');
+    const updateSpy = vi.spyOn(CronSchedule, 'updateOne');
+    try {
+      await cronManager.start();
+      expect(seedSpy).toHaveBeenCalledTimes(1);
+      seedSpy.mockClear();
+      updateSpy.mockClear();
+
+      const res = await get('/jobs');
+      expect(res.status).toBe(200);
+      expect(seedSpy).not.toHaveBeenCalled();
+      expect(updateSpy).not.toHaveBeenCalled();
+    } finally {
+      await cronManager.stop();
+      seedSpy.mockRestore();
+      updateSpy.mockRestore();
+    }
+  });
+
+  it('lists registry defaults without writing when schedules are missing', async () => {
+    const updateSpy = vi.spyOn(CronSchedule, 'updateOne');
+    try {
+      await CronSchedule.deleteMany({});
+      const res = await get('/jobs');
+      expect(res.status).toBe(200);
+      expect(res.body.data.items).toHaveLength(JOB_IDS.length);
+      const job = findJob(res.body.data.items, 'usage_purge');
+      expect(job.schedule.expression).toBeTruthy();
+      expect(job.schedule.timezone).toBeTruthy();
+      expect(job.schedule.source).toBe('default');
+      expect(job.scheduling).toBe('ACTIVE');
+      expect(updateSpy).not.toHaveBeenCalled();
+    } finally {
+      updateSpy.mockRestore();
+      await cronManager.seedSchedules();
+    }
   });
 });

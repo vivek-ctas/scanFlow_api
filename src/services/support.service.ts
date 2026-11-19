@@ -33,8 +33,6 @@ import { enqueueSupportNotification } from '../queues/support.queue.js';
 import {
   saveAttachments,
   deleteStoredFiles,
-  attachmentExists,
-  deleteTempFiles,
   createAttachmentToken,
 } from './support-storage.service.js';
 import {
