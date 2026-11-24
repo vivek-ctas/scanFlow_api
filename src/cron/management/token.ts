@@ -9,14 +9,13 @@ import { logger } from '../../config/logger.js';
  * The algorithm is pinned to HS256; `none` and every other alg are rejected.
  * Changing the derivation constants requires a contract version bump.
  */
-export const MGMT_TOKEN_ALG = 'HS256';
-export const MGMT_TOKEN_ISSUER = 'cronzivo';
-export const MGMT_TOKEN_SUBJECT = 'cronzivo-panel';
-export const MGMT_TOKEN_SALT = 'cronzivo-mgmt-token-v1';
-export const MGMT_TOKEN_MAX_TTL_SEC = 900;
-export const MGMT_TOKEN_CLOCK_SKEW_SEC = 60;
+const MGMT_TOKEN_ALG = 'HS256';
+const MGMT_TOKEN_ISSUER = 'cronzivo';
+const MGMT_TOKEN_SALT = 'cronzivo-mgmt-token-v1';
+const MGMT_TOKEN_MAX_TTL_SEC = 900;
+const MGMT_TOKEN_CLOCK_SKEW_SEC = 60;
 
-export interface ManagementTokenPayload {
+interface ManagementTokenPayload {
   iss: string;
   aud: string;
   sub: string;
@@ -25,7 +24,7 @@ export interface ManagementTokenPayload {
   jti: string;
 }
 
-export type VerifyFailureReason =
+type VerifyFailureReason =
   | 'format'
   | 'alg'
   | 'signature'
@@ -40,10 +39,10 @@ export type VerifyManagementTokenResult =
   | { ok: true; payload: ManagementTokenPayload }
   | { ok: false; reason: VerifyFailureReason };
 
-export const buildAudience = (productCode: string, environment: string) =>
+const buildAudience = (productCode: string, environment: string) =>
   `${String(productCode).toUpperCase()}|${String(environment).toUpperCase()}`;
 
-export const cronzivoAudience = () =>
+const cronzivoAudience = () =>
   buildAudience(config.cronzivo.productCode, config.cronzivo.environment);
 
 export const deriveManagementKey = (globalKey: string, aud: string): Buffer =>

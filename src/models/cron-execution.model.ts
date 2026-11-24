@@ -2,9 +2,9 @@ import mongoose, { Document, Schema } from 'mongoose';
 import config from '../config/config.js';
 import { toJSON } from './plugins/toJSON.plugin.js';
 
-export type CronExecutionTrigger = 'SCHEDULED' | 'MANUAL';
-export type CronExecutionTriggeredBy = 'system' | 'cronzivo-panel';
-export type CronExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+type CronExecutionTrigger = 'SCHEDULED' | 'MANUAL';
+type CronExecutionTriggeredBy = 'system' | 'cronzivo-panel';
+type CronExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
 
 export interface ICronExecution extends Document {
   execution_id: string;

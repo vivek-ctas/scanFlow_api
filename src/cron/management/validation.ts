@@ -11,7 +11,7 @@ import { ManagementError } from './errors.js';
  * Semantic rules that need cron/timezone libraries stay in `cron.ts` / the
  * manager; this file only validates params/query/body shape and enums.
  */
-export const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,63}$/;
+const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{2,63}$/;
 
 const jobId = Joi.string().pattern(JOB_ID_PATTERN);
 const limit = Joi.number().integer().min(1).max(200).default(50);

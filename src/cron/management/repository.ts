@@ -43,10 +43,10 @@ export const sanitizeText = (value: unknown, max = 500): string => {
 
 export const newExecutionId = (): string => crypto.randomUUID();
 
-export const encodeCursor = (parts: Array<string | number>): string =>
+const encodeCursor = (parts: Array<string | number>): string =>
   Buffer.from(parts.join('|'), 'utf8').toString('base64url');
 
-export const decodeCursor = (cursor: string): string[] => {
+const decodeCursor = (cursor: string): string[] => {
   try {
     const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
     const parts = decoded.split('|');
@@ -59,20 +59,6 @@ export const decodeCursor = (cursor: string): string[] => {
   }
 };
 
-export const parseLimit = (
-  value: unknown,
-  defaultValue = 50,
-  max = 200,
-): number => {
-  if (value === undefined || value === null || value === '')
-    return defaultValue;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) {
-    throw validationError(`limit must be an integer between 1 and ${max}`);
-  }
-  return parsed;
-};
-
 export const serializeExecutionSummary = (row: any): ExecutionSummaryView => ({
   execution_id: String(row.execution_id),
   status: String(row.status),
@@ -82,7 +68,7 @@ export const serializeExecutionSummary = (row: any): ExecutionSummaryView => ({
   duration_ms: row.duration_ms ?? null,
 });
 
-export const serializeExecution = (row: any): ExecutionView => {
+const serializeExecution = (row: any): ExecutionView => {
   // `error.message` is the legacy shape; new rows store `error_message`.
   const errorMessage =
     row.error_message ?? row.error?.message ?? row.error ?? null;
@@ -102,7 +88,7 @@ export const serializeExecution = (row: any): ExecutionView => {
   };
 };
 
-export const serializeLog = (row: any): LogView => ({
+const serializeLog = (row: any): LogView => ({
   seq: Number(row.seq ?? 0),
   ts: toIso(row.ts) as string,
   level: String(row.level),
@@ -111,7 +97,7 @@ export const serializeLog = (row: any): LogView => ({
   data: row.data ?? null,
 });
 
-export const serializeAudit = (row: any): AuditView => {
+const serializeAudit = (row: any): AuditView => {
   // Rows written before the actor-object migration stored `actor` as a string
   // and `ip` at the top level; normalise both shapes on read.
   const legacyActor =

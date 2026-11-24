@@ -79,7 +79,7 @@ const mapCronValidation = (error: unknown): ManagementError => {
 
 const skippedCodes = new Set(['JOB_ALREADY_RUNNING', 'JOB_NOT_RUNNABLE']);
 
-export class CronManager {
+class CronManager {
   private readonly scheduler = new CronSchedulerAdapter();
   private readonly running = new Map<string, string>();
   private reconcileTimer: NodeJS.Timeout | null = null;

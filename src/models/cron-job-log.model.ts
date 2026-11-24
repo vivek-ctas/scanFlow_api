@@ -2,7 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 import config from '../config/config.js';
 import { toJSON } from './plugins/toJSON.plugin.js';
 
-export type CronLogLevel = 'INFO' | 'WARN' | 'ERROR';
+type CronLogLevel = 'INFO' | 'WARN' | 'ERROR';
 
 export interface ICronJobLog extends Document {
   job_id: string;
