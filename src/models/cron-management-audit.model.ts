@@ -73,7 +73,7 @@ if (config.cronzivo.auditRetentionDays > 0) {
     { ts: 1 },
     {
       expireAfterSeconds: config.cronzivo.auditRetentionDays * 86400,
-      name: 'cron_management_audit_ttl',
+      name: 'tbl_cron_management_audits_ttl',
     },
   );
 }
@@ -83,5 +83,5 @@ cronManagementAuditSchema.plugin(toJSON);
 export const CronManagementAudit = mongoose.model<ICronManagementAudit>(
   'CronManagementAudit',
   cronManagementAuditSchema,
-  'cron_management_audit',
+  'tbl_cron_management_audits',
 );

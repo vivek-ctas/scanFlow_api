@@ -255,8 +255,25 @@ const envVarsSchema = Joi.object()
     CRONZIVO_RECONCILE_SEC: Joi.number()
       .integer()
       .min(5)
-      .default(30)
+      .default(15)
       .description('scheduler reconcile interval in seconds'),
+    CRONZIVO_AUTO_CONNECT: Joi.boolean()
+      .default(false)
+      .description('register this product with CronZivo on boot'),
+    CRONZIVO_API_URL: Joi.string()
+      .uri({ scheme: ['http', 'https'] })
+      .allow('')
+      .default('')
+      .description('CronZivo API base URL including /api/v1'),
+    CRONZIVO_PUBLIC_BASE_URL: Joi.string()
+      .uri({ scheme: ['http', 'https'] })
+      .allow('')
+      .default('')
+      .description('public base URL of this ScanFlow instance'),
+    CRONZIVO_PRODUCT_NAME: Joi.string()
+      .allow('')
+      .default('')
+      .description('product name registered with CronZivo'),
   })
   .unknown();
 
@@ -266,6 +283,19 @@ const { value: envVars, error } = envVarsSchema
 
 if (error) {
   throw new Error(`Config validation error: ${error.message}`);
+}
+
+if (envVars.CRONZIVO_AUTO_CONNECT) {
+  const required = [
+    'CRONZIVO_API_URL',
+    'CRONZIVO_PUBLIC_BASE_URL',
+    'CRONZIVO_PRODUCT_NAME',
+  ].filter((name) => !envVars[name]);
+  if (required.length > 0) {
+    throw new Error(
+      `Config validation error: ${required.join(', ')} required when CRONZIVO_AUTO_CONNECT=true`,
+    );
+  }
 }
 
 const cronzivoKey = String(envVars.CRONZIVO_API_KEY ?? '');
@@ -423,6 +453,12 @@ export const config = {
     logRetentionDays: envVars.CRONZIVO_LOG_RETENTION_DAYS,
     auditRetentionDays: envVars.CRONZIVO_AUDIT_RETENTION_DAYS,
     reconcileSec: envVars.CRONZIVO_RECONCILE_SEC,
+    autoConnect: {
+      enabled: envVars.CRONZIVO_AUTO_CONNECT,
+      apiUrl: envVars.CRONZIVO_API_URL,
+      publicBaseUrl: envVars.CRONZIVO_PUBLIC_BASE_URL,
+      productName: envVars.CRONZIVO_PRODUCT_NAME,
+    },
   },
 };
 

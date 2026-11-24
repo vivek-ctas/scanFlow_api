@@ -69,5 +69,5 @@ cronExecutionSchema.plugin(toJSON);
 export const CronExecution = mongoose.model<ICronExecution>(
   'CronExecution',
   cronExecutionSchema,
-  'cron_executions',
+  'tbl_cron_executions',
 );

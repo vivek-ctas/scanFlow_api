@@ -184,7 +184,6 @@ export class CronManager {
   async reconcile(): Promise<void> {
     if (!this.started) return;
 
-    await this.seedSchedules();
     const ids = JOB_REGISTRY.map((job) => job.id);
     const rows = await CronSchedule.find({ job_id: { $in: ids } }).lean();
     const byId = new Map(rows.map((row: any) => [String(row.job_id), row]));
@@ -1209,21 +1208,23 @@ export class CronManager {
   }
 
   async listJobs(): Promise<{ items: JobView[]; total: number }> {
-    await this.seedSchedules();
     const ids = JOB_REGISTRY.map((job) => job.id);
     const rows = await CronSchedule.find({ job_id: { $in: ids } }).lean();
     const byId = new Map(rows.map((row: any) => [String(row.job_id), row]));
     const lastByJob = await lastExecutionByJob(ids);
 
     const items = JOB_REGISTRY.map((job) => {
-      const row: any = byId.get(job.id);
-      if (!row) {
-        throw new ManagementError(
-          httpStatus.INTERNAL_SERVER_ERROR,
-          'INTERNAL_ERROR',
-          'Failed to load job schedule',
-        );
-      }
+      // Listing must stay read-only: when boot seeding has not run (e.g. an
+      // API-only process without the worker), expose the registry defaults
+      // instead of writing a schedule row or failing the whole request.
+      const row: any = byId.get(job.id) ?? {
+        enabled: true,
+        cron_expression: job.defaultExpression,
+        timezone: job.defaultTimezone,
+        source: 'default',
+        version: 1,
+        updated_by: null,
+      };
       return this.jobView(job, row, lastByJob.get(job.id) ?? null);
     });
 
@@ -1373,6 +1374,11 @@ export class CronManager {
         audit: true,
         cancel_running: false,
         cron_seconds: false,
+        // Optional Part B endpoints are intentionally not implemented here;
+        // advertising false keeps the panel from probing them (and logging
+        // 404s) and makes it use the per-job fallback instead.
+        executions_overview: false,
+        stats: false,
       },
     };
   }

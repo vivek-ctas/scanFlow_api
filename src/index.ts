@@ -5,6 +5,7 @@ import { logger } from './config/logger.js';
 import { SystemError, SystemLog } from './models/index.js';
 import { setSystemErrorModel } from './utils/system-error.handler.js';
 import { setSystemLogModel } from './utils/system-log.js';
+import { autoConnectProduct } from './cron/management/auto-connect.js';
 
 setSystemErrorModel(SystemError);
 setSystemLogModel(SystemLog);
@@ -19,6 +20,7 @@ const startServer = async () => {
 
     server = app.listen(config.port, () => {
       logger.info(`Listening on port ${config.port}`);
+      void autoConnectProduct();
     });
   } catch (error) {
     logger.error('Failed to start server', error);
