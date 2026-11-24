@@ -5,16 +5,16 @@
  * Token spec: `cronzivo_api/docs/management-token.md`.
  */
 
-export type CronJobId = string;
+type CronJobId = string;
 
-export interface CronJobCapabilities {
+interface CronJobCapabilities {
   start: boolean;
   stop: boolean;
   run: boolean;
   update_schedule: boolean;
 }
 
-export interface CronJobLogContext {
+interface CronJobLogContext {
   log: (
     level: 'INFO' | 'WARN' | 'ERROR',
     message: string,
@@ -22,9 +22,7 @@ export interface CronJobLogContext {
   ) => Promise<void>;
 }
 
-export type CronJobHandler = (
-  ctx: CronJobLogContext,
-) => Promise<unknown> | unknown;
+type CronJobHandler = (ctx: CronJobLogContext) => Promise<unknown> | unknown;
 
 export interface CronJobDefinition {
   id: CronJobId;
@@ -49,7 +47,7 @@ export interface ManagementAuditContext {
   bulkId?: string | null;
 }
 
-export interface ScheduleView {
+interface ScheduleView {
   expression: string;
   timezone: string;
   source: 'default' | 'custom';
@@ -108,7 +106,7 @@ export interface LogView {
   data: Record<string, unknown> | null;
 }
 
-export interface AuditActorView {
+interface AuditActorView {
   source: string;
   token_jti: string | null;
   ip: string | null;
@@ -144,7 +142,7 @@ export interface BulkItemResult {
   status?: string;
 }
 
-export interface BulkSummary {
+interface BulkSummary {
   total: number;
   succeeded: number;
   failed: number;

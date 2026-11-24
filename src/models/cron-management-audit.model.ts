@@ -2,9 +2,9 @@ import mongoose, { Document, Schema } from 'mongoose';
 import config from '../config/config.js';
 import { toJSON } from './plugins/toJSON.plugin.js';
 
-export type CronAuditOutcome = 'SUCCESS' | 'FAILED' | 'REJECTED';
+type CronAuditOutcome = 'SUCCESS' | 'FAILED' | 'REJECTED';
 
-export interface CronAuditActor {
+interface CronAuditActor {
   source: string;
   token_jti?: string | null;
   ip?: string | null;

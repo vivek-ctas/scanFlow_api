@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import { toJSON } from './plugins/toJSON.plugin.js';
 
-export type CronScheduleSource = 'default' | 'custom';
+type CronScheduleSource = 'default' | 'custom';
 
 export interface ICronSchedule extends Document {
   job_id: string;

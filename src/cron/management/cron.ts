@@ -27,7 +27,7 @@ export class CronValidationError extends Error {
   }
 }
 
-export const assertTimezone = (timezone: string): void => {
+const assertTimezone = (timezone: string): void => {
   if (typeof timezone !== 'string' || !timezone.trim()) {
     throw new CronValidationError('INVALID_TIMEZONE', 'Invalid timezone');
   }
@@ -40,7 +40,7 @@ export const assertTimezone = (timezone: string): void => {
 };
 
 /** Normalise macros and enforce the 5-field v1 format. */
-export const normalizeCronExpression = (expression: string): string => {
+const normalizeCronExpression = (expression: string): string => {
   if (typeof expression !== 'string') {
     throw new CronValidationError('INVALID_CRON', 'Invalid cron expression');
   }
